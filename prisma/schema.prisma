@@ -27,9 +27,9 @@ model User {
   Instagram_Access Instagram_Access[]
   memberships      Membership[]
   posts            Post[]             @relation("UserPosts")
+  tikTokAccesses   TikTok_Access[]
   Organization     Organization?      @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   Role             Role?              @relation(fields: [roleID], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  tikTokAccesses   TikTok_Access[]
 }
 
 model Organization {
@@ -122,6 +122,12 @@ model BlueSky_Access {
   redSocialId   Int       @default(1)
   nombreUsuario String
   appPassword   String
+  follows       Int?
+  metricaB      Int?
+  avatar        String?
+  linkedAt      DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime  @default(now()) @db.Timestamp(6)
+  displayName   String
   RedSocial     RedSocial @relation(fields: [redSocialId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   User          User      @relation(fields: [usuarioId], references: [id], map: "CuentaRedSocial_usuarioId_fkey")
 
@@ -142,6 +148,11 @@ model Instagram_Access {
   redSocial   Int       @default(2)
   usuarioRed  String
   accessToken String?
+  follows     Int?
+  metricaB    Int?
+  avatar      String?
+  linkedAt    DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime  @default(now()) @db.Timestamp(6)
   RedSocial   RedSocial @relation(fields: [redSocial], references: [id], onDelete: NoAction, onUpdate: NoAction)
   User        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -176,6 +187,11 @@ model Facebook_Access {
   redSocial   Int       @default(3)
   usuarioRed  String
   accessToken String?
+  follows     Int?
+  metricaB    Int?
+  avatar      String?
+  linkedAt    DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime  @default(now()) @db.Timestamp(6)
   RedSocial   RedSocial @relation(fields: [redSocial], references: [id], onDelete: NoAction, onUpdate: NoAction)
   User        User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
@@ -184,15 +200,18 @@ model TikTok_Access {
   id           BigInt    @id @default(autoincrement())
   userId       Int
   redSocial    Int       @default(4)
-  openId       String
   accessToken  String
-  refreshToken String?
-  expiresIn    Int?
   createdAt    DateTime  @default(now())
+  expiresIn    Int?
+  openId       String
+  refreshToken String?
   updatedAt    DateTime  @updatedAt
-
-  User      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  RedSocial RedSocial @relation(fields: [redSocial], references: [id])
+  usuarioRed   String    @default("RETRIEVING")
+  follows      Int?
+  metricaB     Int?
+  avatar       String?
+  RedSocial    RedSocial @relation(fields: [redSocial], references: [id])
+  User         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, redSocial])
 }

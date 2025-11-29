@@ -15,10 +15,16 @@ export async function POST(req: Request) {
   const { identifier, password } = await req.json();
 
   try {
-    // Llama al agente para que recepcione el DID de Bluesky
+    // 1. Llama al agente para validar credenciales y obtener el DID
     const agent = await getBskyAgent(identifier, password);
     const did = agent.session?.did;
     if (!did) throw new Error("No DID returned from Bluesky");
+
+    // 2. 🟢 NUEVO: Obtener el perfil completo para sacar el displayName y datos iniciales
+    const profileRes = await agent.app.bsky.actor.getProfile({
+      actor: did,
+    });
+    const profileData = profileRes.data;
 
     const user = await prisma.user.findUnique({
       where: { email: session.user?.email ?? "" },
@@ -40,6 +46,12 @@ export async function POST(req: Request) {
         data: {
           nombreUsuario: identifier,
           appPassword: encryptedPassword,
+          // 👇 Guardamos los datos de caché para evitar errores de schema y optimizar carga
+          displayName: profileData.displayName || identifier,
+          follows: profileData.followersCount || 0,
+          metricaB: profileData.postsCount || 0,
+          avatar: profileData.avatar || null,
+          updatedAt: new Date(),
         },
       });
     } else {
@@ -49,13 +61,20 @@ export async function POST(req: Request) {
           redSocialId: 1,
           nombreUsuario: identifier,
           appPassword: encryptedPassword,
+          displayName: profileData.displayName || identifier,
+          follows: profileData.followersCount || 0,
+          metricaB: profileData.postsCount || 0,
+          avatar: profileData.avatar || null,
         },
       });
     }
 
     return Response.json({ ok: true });
-  } catch (err: any) {
-    console.error("Bluesky check error:", err);
-    return Response.json({ ok: false, error: err.message }, { status: 400 });
+  } catch (error: any) {
+    console.error("Error linking Bluesky:", error);
+    return Response.json(
+      { ok: false, error: error.message || "Error al vincular" },
+      { status: 500 }
+    );
   }
 }
