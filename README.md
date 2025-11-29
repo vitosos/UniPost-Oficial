@@ -1,40 +1,48 @@
-<<<<<<< HEAD
-# UniPost-APT122
-=======
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# UniPost 🚀
 
-## Getting Started
+**Plataforma integral de gestión y publicación en redes sociales.**
 
-First, run the development server:
+UniPost es una herramienta web diseñada para optimizar el tiempo de creadores de contenido y equipos, permitiendo la publicación simultánea ("Crossposting"), programación de contenido y análisis de métricas unificadas para Instagram, Facebook, TikTok, Bluesky y muchas más en el futuro.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Características Principales
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+* **Multi-Cuenta:** Conecta y gestiona múltiples perfiles sociales desde un solo lugar.
+* **Composer Inteligente:**
+    * Validación de restricciones por red en tiempo real (ej: "TikTok solo permite video").
+    * Subida de multimedia (Imágenes y Video).
+    * Personalización de texto por cada red social.
+* **Scheduler (Programador):** Agenda publicaciones para fechas futuras con precisión de minutos.
+* **Métricas Unificadas:**
+    * Visualización de Likes, Comentarios y Shares agregados.
+    * Análisis de rendimiento de Hashtags.
+    * Sincronización automática con APIs externas.
+* **Gestión de Equipos:** Roles de usuario, organizaciones y permisos de administración.
+* **Seguridad Robusta:** Encriptación AES-256 para todos los tokens de acceso de terceros.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## Librerías en Uso
 
-To learn more about Next.js, take a look at the following resources:
+* **Framework:** [Next.js 15](https://nextjs.org/) (App Router)
+* **Base de Datos:** [PostgreSQL](https://www.postgresql.org/)
+* **ORM:** [Prisma](https://www.prisma.io/)
+* **Autenticación:** [NextAuth.js](https://next-auth.js.org/) (v4)
+* **Estilos:** [Tailwind CSS](https://tailwindcss.com/)
+* **Notificaciones:** [react-hot-toast](https://react-hot-toast.com/)
+* **Gráficos:** [Recharts](https://recharts.org/)
+* **Utilidades:** `bcrypt` (hashing), `crypto` (encriptación), `sharp` (imágenes).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Integraciones de API
+* **Meta Graph API (v21.0):** Facebook Pages & Instagram Business.
+* **TikTok for Developers (V2):** Login Kit & Content Posting API.
+* **Bluesky (AT Protocol):** `@atproto/api`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## Instalación y Configuración Local
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
->>>>>>> adccc4a (Empezando pruebas)
+### 1. Prerrequisitos
+* Node.js 18+
+* PostgreSQL (Local o en la nube como Neon/Supabase)
