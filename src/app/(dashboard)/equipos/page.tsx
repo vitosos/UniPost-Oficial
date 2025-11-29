@@ -141,7 +141,8 @@ export default function EquiposPage() {
     async function handleCreateOrg(e: React.FormEvent) {
         e.preventDefault();
         if (!newOrgName) return;
-
+        
+        setIsCreatingOrg(true);
         try {
             const res = await fetch("/api/organizations", {
                 method: "POST",
@@ -154,8 +155,6 @@ export default function EquiposPage() {
             if (json.ok) {
                 toast.success("Organización creada ✅");
                 setNewOrgName("");
-                // Recargamos los datos para que aparezca en la lista
-                // Si estás en modo admin, esto recargará la lista de "organizations"
                 fetchData();
             } else {
                 toast.error("Error al crear: " + (json.error || "Desconocido"));
@@ -163,6 +162,8 @@ export default function EquiposPage() {
         } catch (error) {
             console.error(error);
             toast.error("Error de conexión");
+        } finally {
+            setIsCreatingOrg(false);
         }
     }
 
@@ -209,23 +210,43 @@ export default function EquiposPage() {
     };
 
     return (
-        <div className="max-w-6xl mx-auto space-y-16">
+        <div className="max-w-6xl mx-auto space-y-10">
 
-            {/* 🏢 SECCIÓN 1: MI ORGANIZACIÓN */}
+            {/* 👑 SUPER ADMIN: SELECTOR GLOBAL (Movid a la parte superior) */}
+            {isSuperAdmin && (
+                <div className="bg-white/5 border border-white/10 p-4 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-top-4">
+                    <span className="text-indigo-300 font-bold text-sm uppercase tracking-wider">🛡️ Panel de Administrador</span>
+                    <div className="flex items-center gap-3">
+                        <label className="text-sm text-slate-300">Ver datos de:</label>
+                        <select
+                            className="p-2 bg-black/30 border border-white/20 rounded text-slate-200 text-sm focus:border-indigo-500 outline-none"
+                            value={selectedOrgId}
+                            onChange={(e) => setSelectedOrgId(Number(e.target.value))}
+                        >
+                            <option value="">-- Mi Organización --</option>
+                            {organizations.map(org => (
+                                <option key={org.id} value={org.id}>{org.name} (ID: {org.id})</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+            )}
+
+            {/* 🏢 SECCIÓN 1: MI ORGANIZACIÓN (Vista Operativa) */}
             <section className="space-y-6">
                 <div className="flex flex-col md:flex-row justify-between items-end border-b border-white/20 pb-4 gap-4">
                     <div>
                         <h2 className="text-sm uppercase tracking-wider text-indigo-200 font-bold">Vista Operativa</h2>
                         <h1 className="text-4xl font-bold flex items-center gap-3">
                             🏢 {currentOrgName}
-                            {metrics?.organizationId && isSuperAdmin && <span className="text-sm bg-white/10 px-2 rounded border border-white/20">ID: {metrics.organizationId}</span>}
+                            {metrics?.organizationId && isSuperAdmin && <span className="text-sm bg-white/10 px-2 rounded border border-white/20 text-base font-normal">ID: {metrics.organizationId}</span>}
                         </h1>
                     </div>
                 </div>
-
+                
                 {loading ? <div className="text-center py-10 animate-pulse">Cargando...</div> : metrics ? (
                     <>
-                        {/* Cards Totales (Mantener igual que antes) */}
+                        {/* Cards Totales */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className="backdrop-blur-md bg-white/5 border border-white/10 p-6 rounded-xl">
                                 <p className="text-sm text-gray-300 font-bold">Total Likes</p>
@@ -296,21 +317,41 @@ export default function EquiposPage() {
 
                                                 {isSuperAdmin && (
                                                     <td className="p-4 text-right">
-                                                        {/* Lógica de edición igual que antes */}
-                                                        {member.roleId <= 3 ? (
-                                                            editingMemberId === member.id ? (
-                                                                <div className="flex items-center justify-end gap-2">
-                                                                    <select className="text-sm bg-black/20 border border-white/30 rounded px-2 py-1 text-slate-200" value={targetOrgForMove} onChange={(e) => setTargetOrgForMove(e.target.value)}>
-                                                                        <option value="">Destino...</option>
-                                                                        {organizations.filter(o => o.id !== metrics.organizationId).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                                                                    </select>
-                                                                    <button onClick={() => handleMoveUser(member.id)} disabled={!targetOrgForMove} className="bg-green-500 p-1 rounded">💾</button>
-                                                                    <button onClick={() => setEditingMemberId(null)} className="bg-red-500/50 p-1 rounded">✕</button>
-                                                                </div>
+                                                        <div className="flex items-center justify-end gap-2">
+
+                                                            {/* Botón Ver Métricas Personales */}
+                                                            <a
+                                                                href={`/equipos/metricas/${member.id}`}
+                                                                className="text-xs bg-blue-500/20 hover:bg-blue-500/40 text-blue-200 px-3 py-1.5 rounded transition border border-blue-500/30 flex items-center gap-1"
+                                                                title="Ver métricas de este usuario"
+                                                            >
+                                                                📊 <span className="hidden lg:inline">Métricas</span>
+                                                            </a>
+
+                                                            {/* Lógica Mover Usuario */}
+                                                            {member.roleId <= 3 ? (
+                                                                editingMemberId === member.id ? (
+                                                                    <div className="flex items-center justify-end gap-2">
+                                                                        <select
+                                                                            className="text-sm bg-black/20 border border-white/30 rounded px-2 py-1 text-slate-200"
+                                                                            value={targetOrgForMove}
+                                                                            onChange={(e) => setTargetOrgForMove(e.target.value)}
+                                                                        >
+                                                                            <option value="">Destino...</option>
+                                                                            {organizations.filter(o => o.id !== metrics.organizationId).map(o => (
+                                                                                <option key={o.id} value={o.id}>{o.name}</option>
+                                                                            ))}
+                                                                        </select>
+                                                                        <button onClick={() => handleMoveUser(member.id)} disabled={!targetOrgForMove} className="bg-green-500 p-1 rounded">💾</button>
+                                                                        <button onClick={() => setEditingMemberId(null)} className="bg-red-500/50 p-1 rounded">✕</button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <button onClick={() => setEditingMemberId(member.id)} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded">🔁 Mover</button>
+                                                                )
                                                             ) : (
-                                                                <button onClick={() => setEditingMemberId(member.id)} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded">🔁 Mover</button>
-                                                            )
-                                                        ) : <span className="text-xs text-slate-200/20 italic">No editable</span>}
+                                                                <span className="text-xs text-slate-200/20 italic">Admin</span>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                 )}
                                             </tr>
@@ -334,21 +375,6 @@ export default function EquiposPage() {
                         <div>
                             <h2 className="text-sm uppercase tracking-wider text-orange-200 font-bold">Zona Administrativa</h2>
                             <h1 className="text-3xl font-bold">⚙️ Gestión de Organizaciones</h1>
-                        </div>
-
-                        {/* Selector para cambiar la vista de arriba */}
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm text-gray-300">Ver datos de:</label>
-                            <select
-                                className="p-2 bg-white/10 border border-white/20 rounded text-slate-200 text-sm"
-                                value={selectedOrgId}
-                                onChange={(e) => setSelectedOrgId(Number(e.target.value))}
-                            >
-                                <option value="">-- Mi Organización --</option>
-                                {organizations.map(org => (
-                                    <option key={org.id} value={org.id}>{org.name} (ID: {org.id})</option>
-                                ))}
-                            </select>
                         </div>
                     </div>
 

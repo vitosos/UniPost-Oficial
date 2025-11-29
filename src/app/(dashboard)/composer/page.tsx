@@ -456,7 +456,7 @@ export default function ComposerPage() {
                             ))}
                         </select>
                         {/* 🟢 NUEVO: Mostrar quién está publicando */}
-                        <p className="text-[24px] text-green-400 mt-1 flex items-center gap-1">
+                        <p className="text-[12px] text-green-400 mt-1 flex items-center gap-1">
                             ✅ Publicando como: <span className="font-bold">{connections[v.network]?.username || "Usuario"}</span>
                         </p>
                     </div>

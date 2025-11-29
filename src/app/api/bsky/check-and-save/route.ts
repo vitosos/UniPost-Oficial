@@ -46,12 +46,12 @@ export async function POST(req: Request) {
         data: {
           nombreUsuario: identifier,
           appPassword: encryptedPassword,
-          // 👇 Guardamos los datos de caché para evitar errores de schema y optimizar carga
           displayName: profileData.displayName || identifier,
           follows: profileData.followersCount || 0,
           metricaB: profileData.postsCount || 0,
           avatar: profileData.avatar || null,
           updatedAt: new Date(),
+          handle: profileData.handle,
         },
       });
     } else {
@@ -65,6 +65,7 @@ export async function POST(req: Request) {
           follows: profileData.followersCount || 0,
           metricaB: profileData.postsCount || 0,
           avatar: profileData.avatar || null,
+          handle: profileData.handle,
         },
       });
     }

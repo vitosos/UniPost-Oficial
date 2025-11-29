@@ -69,7 +69,7 @@ export default function CuentasConectadas({ userEmail }: Props) {
         const data = await res.json();
         if (data.ok && data.linked) {
           setLinked(true);
-          setLinkedUser(data.nombreUsuario);
+          setLinkedUser(data.handle);
           loadProfile().finally(() => setCheckingProfile(false));
         }
       } catch (e) { console.error(e); } 

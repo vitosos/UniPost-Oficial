@@ -128,6 +128,7 @@ model BlueSky_Access {
   linkedAt      DateTime  @default(now()) @db.Timestamp(6)
   updatedAt     DateTime  @default(now()) @db.Timestamp(6)
   displayName   String
+  handle        String    @default("RETRIEVING")
   RedSocial     RedSocial @relation(fields: [redSocialId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   User          User      @relation(fields: [usuarioId], references: [id], map: "CuentaRedSocial_usuarioId_fkey")
 
