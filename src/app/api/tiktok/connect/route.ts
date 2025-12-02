@@ -21,7 +21,6 @@ export async function GET() {
   url.searchParams.set("client_key", process.env.TIKTOK_CLIENT_KEY!);
   url.searchParams.set("response_type", "code");
   
-  // 🔴 AGREGADO: "user.info.stats"
   url.searchParams.set("scope", "user.info.basic,user.info.stats,video.upload,video.publish");
   
   url.searchParams.set("redirect_uri", process.env.TIKTOK_REDIRECT_URI!);

@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   // Generar código
   const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-  // 🧹 LIMPIEZA: Borrar tokens anteriores de este email si existieran (ej: registros fallidos previos)
+  // Borrar tokens anteriores de este email si existieran (ej: registros fallidos previos)
   await prisma.verificationToken.deleteMany({
     where: { identifier: email },
   });

@@ -2,7 +2,6 @@ import MetricsDashboard from "@/components/MetricsDashboard";
 import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 
-// ✅ CAMBIO: params es una Promesa ahora
 export default async function MemberMetricsPage({ 
   params 
 }: { 

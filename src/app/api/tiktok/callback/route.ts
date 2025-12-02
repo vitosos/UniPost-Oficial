@@ -77,7 +77,6 @@ export async function GET(req: NextRequest) {
       await prisma.tikTok_Access.create({ data: dataToSave });
     }
 
-    // ✅ CORRECCIÓN FINAL: Redirigir usando la URL base explícita
     return NextResponse.redirect(new URL("/perfil?tiktok=linked", baseUrl));
 
   } catch (error) {

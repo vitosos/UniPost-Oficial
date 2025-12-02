@@ -83,8 +83,8 @@ export async function POST(req: Request) {
       organizationId,
       title,
       body: baseBody,
-      category, // 👈 Nuevo
-      visible,  // 👈 Nuevo
+      category,
+      visible,
       variants,
       medias,
       mediaBase64,

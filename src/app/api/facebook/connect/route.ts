@@ -32,7 +32,6 @@ export async function GET() {
   url.searchParams.set("client_id", FACEBOOK_APP_ID);
   url.searchParams.set("redirect_uri", FACEBOOK_REDIRECT_URI);
   
-  // 🔹 CAMBIO CLAVE: Scopes para Páginas de Facebook
   url.searchParams.set("scope",
     [
       "pages_show_list",       // Ver las páginas del usuario

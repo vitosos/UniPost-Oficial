@@ -18,13 +18,13 @@ export default function PerfilPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   
-  // 🔐 Estados Cambio de Contraseña
+  // Estados Cambio de Contraseña
   const [currentPass, setCurrentPass] = useState("");
   const [newPass, setNewPass] = useState("");
   const [confirmPass, setConfirmPass] = useState("");
   const [passLoading, setPassLoading] = useState(false);
 
-  // 🏢 Estado para el nombre de la Organización
+  // Estado para el nombre de la Organización
   const [orgName, setOrgName] = useState<string>("Cargando...");
 
   const fileInputRef = useRef<HTMLInputElement>(null);

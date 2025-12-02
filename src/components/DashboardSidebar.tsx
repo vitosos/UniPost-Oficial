@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useState, useEffect } from "react"; // 👈 Importamos useEffect
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import UniPostLogo from "@/app/assets/UniPost.png"; 
 

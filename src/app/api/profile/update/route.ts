@@ -28,7 +28,7 @@ export async function PUT(request: Request) {
 
       const filename = `avatar-${Date.now()}-${file.name.replace(/\s/g, "-")}`;
       
-      // ✅ CAMBIO 1: Definimos la ruta específica 'ProfilePics'
+      // Definimos la ruta específica 'ProfilePics'
       const uploadDir = path.join(process.cwd(), "public", "uploads", "ProfilePics");
       
       // Crear la carpeta recursivamente (si 'uploads' o 'ProfilePics' no existen, las crea)
@@ -37,7 +37,7 @@ export async function PUT(request: Request) {
       const filePath = path.join(uploadDir, filename);
       await writeFile(filePath, buffer);
 
-      // ✅ CAMBIO 2: Guardamos la ruta con la nueva carpeta en la BD
+      // Guardamos la ruta con la nueva carpeta en la BD
       updateData.image = `/uploads/ProfilePics/${filename}`;
     }
 

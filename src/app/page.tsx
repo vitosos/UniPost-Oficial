@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { PublicFeed } from "@/components/PublicFeed";
 import Image from "next/image";
-import toast from "react-hot-toast"; // 👈 Importamos toast
+import toast from "react-hot-toast";
 import UniPostLogo from "./assets/UniPost.png";
 
 // --- IMPORTACIÓN DE ÍCONOS DE REDES ---

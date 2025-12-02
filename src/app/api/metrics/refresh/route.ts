@@ -41,7 +41,6 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.email) return NextResponse.json({ ok: false }, { status: 401 });
 
     // 1. Obtener usuario solicitante (Admin o Dueño)
-    // 🟢 CAMBIO: Traemos también organizationId para comparar
     const requester = await prisma.user.findUnique({ 
         where: { email: session.user.email },
         select: { id: true, roleID: true, organizationId: true } 
@@ -59,16 +58,16 @@ export async function POST(req: NextRequest) {
             const reqTargetId = Number(body.targetUserId);
             const globalRole = Number(requester.roleID || 0);
 
-            // Caso A: Es Super Admin (Rol Global 4 o 5) -> Permiso Total
+            // Es Super Admin (Rol Global 4 o 5) -> Permiso Total
             if (globalRole >= 4) {
                 targetUserId = reqTargetId;
                 console.log(`🛡️ Super Admin ${requester.id} refrescando a usuario ${targetUserId}`);
             } 
-            // Caso B: Se está refrescando a sí mismo -> Permiso Total
+            // Se está refrescando a sí mismo -> Permiso Total
             else if (reqTargetId === requester.id) {
                 targetUserId = reqTargetId;
             }
-            // Caso C: Es Manager de Organización -> Permiso Condicional
+            // Es Manager de Organización -> Permiso Condicional
             else {
                 // 1. Verificar que ambos estén en la MISMA organización
                 const targetUserCheck = await prisma.user.findUnique({
@@ -92,7 +91,7 @@ export async function POST(req: NextRequest) {
                     return NextResponse.json({ ok: false, error: "Se requiere rol de Manager para esta acción." }, { status: 403 });
                 }
 
-                // ✅ Si pasa las validaciones, permitimos el cambio
+                // Si pasa las validaciones, permitimos el cambio
                 targetUserId = reqTargetId;
                 console.log(`👔 Manager ${requester.id} refrescando a miembro ${targetUserId}`);
             }

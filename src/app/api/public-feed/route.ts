@@ -11,7 +11,7 @@ export async function GET() {
         status: "PUBLISHED", // Solo publicados
         uri: { not: null },  // Que tengan enlace real
         
-        // 👇 FILTRO DE SEGURIDAD: Solo mostrar si el post padre es visible
+        // FILTRO DE SEGURIDAD: Solo mostrar si el post padre es visible
         post: {
           visible: true, 
         },
@@ -23,7 +23,7 @@ export async function GET() {
           select: {
             title: true,
             body: true,
-            category: true, // 👈 ¡ESTA ES LA CLAVE PARA EL FILTRO!
+            category: true,
           },
         },
       },

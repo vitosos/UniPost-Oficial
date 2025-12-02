@@ -142,7 +142,7 @@ export default function CuentasConectadas({ userEmail }: Props) {
         setStatus("✅ Cuenta Bluesky vinculada");
         setLinked(true);
         
-        // 🟢 CORRECCIÓN: Forzar carga de perfil y apagar loading
+        // CORRECCIÓN: Forzar carga de perfil y apagar loading
         setCheckingProfile(true);
         await loadProfile(); 
         setCheckingProfile(false); // Ahora sí se mostrará la tarjeta
@@ -174,7 +174,7 @@ export default function CuentasConectadas({ userEmail }: Props) {
       const data = await res.json();
       if (data.ok && data.profile) {
         setProfile(data.profile);
-        setLinkedUser(data.profile.handle); // 🟢 Actualizamos el usuario con el handle real
+        setLinkedUser(data.profile.handle);
       }
     } catch (e) { console.error(e); }
   }

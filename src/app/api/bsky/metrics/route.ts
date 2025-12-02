@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server"; // Usamos NextResponse para consistencia
+import { NextResponse } from "next/server"; 
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { AtpAgent } from "@atproto/api";
 import { decryptBlueskySecret } from "@/lib/cryptoBluesky";
 
-export async function GET(req: Request) { // 👈 Cambiamos a recibir 'req'
+export async function GET(req: Request) {
   const session = await getServerSession();
   if (!session) {
     return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
@@ -40,7 +40,7 @@ export async function GET(req: Request) { // 👈 Cambiamos a recibir 'req'
       where: {
         network: "BLUESKY",
         uri: { not: null },
-        post: { authorId: targetUserId }, // 👈 Usamos targetUserId
+        post: { authorId: targetUserId },
       },
       include: { post: true },
     });

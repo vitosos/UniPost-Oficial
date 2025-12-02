@@ -59,7 +59,6 @@ async function exchangeShortForLongLived(shortLivedToken: string) {
   };
 }
 
-// 3) 🔹 CAMBIO PRINCIPAL: Obtener la Página de Facebook
 async function getFacebookPage(longLivedUserToken: string) {
   // Obtenemos las páginas donde el usuario tiene rol (CREATE_CONTENT, MANAGE, etc.)
   // Solicitamos el access_token de la página directamente por si lo necesitamos guardar,
@@ -81,7 +80,7 @@ async function getFacebookPage(longLivedUserToken: string) {
     throw new Error("El usuario no administra ninguna Página de Facebook.");
   }
 
-  // ⚠️ LÓGICA DE SELECCIÓN:
+  // LÓGICA DE SELECCIÓN:
   // Aquí tomamos la primera página encontrada. 
   // En un sistema multi-página, deberías mostrar una UI para que el usuario elija.
   const page = pagesData.data[0];

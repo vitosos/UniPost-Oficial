@@ -22,7 +22,7 @@ export async function GET() {
     return NextResponse.json({ ok: true, linked: false });
   }
 
-  // 🕒 VERIFICACIÓN DE CADUCIDAD Y AUTO-REFRESH
+  // VERIFICACIÓN DE CADUCIDAD Y AUTO-REFRESH
   let isExpired = false;
   
   // TikTok tokens duran aprox 86400 segundos (24h). 
@@ -57,7 +57,7 @@ export async function GET() {
             console.error("❌ Error Auto-Refresh TikTok:", refreshData);
             isExpired = true; // Falló el refresh, marcamos como expirado real
         } else {
-            // ✅ ¡Éxito! Guardamos los nuevos tokens
+            // Guardamos los nuevos tokens
             await prisma.tikTok_Access.update({
                 where: { id: access.id },
                 data: {

@@ -20,7 +20,6 @@ export function calculateHashtagPerformance(metrics: any[]): HashtagStat[] {
     const matches = text.match(hashtagRegex);
 
     if (matches) {
-      // ✅ CORRECCIÓN: Especificamos <string> para que TypeScript no se confunda
       const uniqueTags = new Set<string>(matches);
 
       for (const tagRaw of uniqueTags) {

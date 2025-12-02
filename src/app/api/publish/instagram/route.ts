@@ -126,7 +126,7 @@ async function getInstagramCredentialsForUser(userId: number): Promise<{
         );
     }
 
-    // 🔐 DESENCRIPTAMOS EL TOKEN AQUÍ
+    // DESENCRIPTAMOS EL TOKEN AQUÍ
     // Si el token en la BD no está encriptado (formato antiguo), esto fallará.
     // Asegúrate de reconectar la cuenta para guardar el token nuevo encriptado.
     const userAccessToken = decrypt(igAccess.accessToken);
@@ -186,7 +186,7 @@ async function getInstagramCredentialsForUser(userId: number): Promise<{
     };
 }
 
-// ✅ LÓGICA INTERNA REUTILIZABLE (Para Cron y API)
+// LÓGICA INTERNA REUTILIZABLE (Para Cron y API)
 export async function publishToInstagramInternal(userId: number, postId: number, variantId?: number | null) {
     // 1. Obtener Post + Variants + Medias
     const post = await prisma.post.findUnique({
@@ -245,7 +245,7 @@ export async function publishToInstagramInternal(userId: number, postId: number,
 
     // 3. Lógica de publicación (Single vs Carousel)
     if (medias.length === 1) {
-        // ✅ Single media flow
+        // Single media flow
         const media = medias[0];
         const mediaUrl = buildAbsoluteUrl(media.url);
         const isVideo =
@@ -285,7 +285,7 @@ export async function publishToInstagramInternal(userId: number, postId: number,
         console.log("✅ IG single media published:", publishRes);
 
     } else {
-        // ✅ Carousel flow
+        // Carousel flow
         const childrenIds: string[] = [];
 
         for (const media of medias) {

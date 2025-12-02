@@ -27,18 +27,17 @@ export const authOptions: NextAuthOptions = {
         const valid = await bcrypt.compare(credentials.password, user.password);
         if (!valid) return null;
 
-        // ⛔ Bloquear si NO está verificado
+        // Bloquear si NO está verificado
         if (!user.emailVerified) {
           throw new Error("EMAIL_NOT_VERIFIED");
         }
 
-        // ✅ CAMBIO 1: Retornar explícitamente los datos, incluyendo la imagen
         return {
           id: user.id,
           name: user.name,
           email: user.email,
           emailVerified: user.emailVerified,
-          image: user.image, // 👈 Importante: Pasar la imagen de la BD al flujo
+          image: user.image,
         };
       },
     }),
@@ -56,12 +55,11 @@ export const authOptions: NextAuthOptions = {
       return true;
     },
 
-    // ✅ CAMBIO 2: Guardar la imagen en el token y soportar actualizaciones
     async jwt({ token, user, trigger, session }) {
       if (user) {
         token.id = user.id;
         token.emailVerified = user.emailVerified;
-        token.picture = user.image; // 👈 Guardamos la imagen en el token
+        token.picture = user.image;
         token.name = user.name;
       }
 
@@ -74,7 +72,6 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
 
-    // ✅ CAMBIO 3: Pasar la imagen del token a la sesión final
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as number;

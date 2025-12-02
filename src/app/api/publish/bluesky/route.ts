@@ -92,7 +92,7 @@ async function compressToSizeLimit(
   return output;
 }
 
-// ✅ LÓGICA INTERNA REUTILIZABLE (Para Cron y API)
+// LÓGICA INTERNA REUTILIZABLE (Para Cron y API)
 export async function publishToBlueskyInternal(userId: number, postId: number, variantId: number) {
     // 1. Obtener credenciales de usuario
     const access = await prisma.blueSky_Access.findFirst({

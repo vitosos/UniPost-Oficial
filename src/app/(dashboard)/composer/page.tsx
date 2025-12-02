@@ -292,7 +292,7 @@ export default function ComposerPage() {
     setVariants(newVariants);
   };
 
-  // 🔴 FILTRO DE REDES: Solo mostramos las que tienen connected: true y no están ya en uso
+  // Solo mostramos las que tienen connected: true y no están ya en uso
   const availableNetworks = ALL_POSSIBLE_NETWORKS.filter(net => 
     connections[net]?.connected === true && // Debe estar conectada
     !variants.some(v => v.network === net)  // No debe estar seleccionada ya
@@ -320,7 +320,7 @@ export default function ComposerPage() {
       <h1 className="text-4xl font-bold mb-8 text-center tracking-tight">Crear nueva publicación</h1>
 
       {!hasAnyConnection ? (
-        // 🚨 ESTADO SIN CONEXIONES
+        // ESTADO SIN CUENTAS ENLAZADAS
         <div className="bg-red-500/10 border border-red-500/20 p-8 rounded-2xl text-center">
             <h2 className="text-xl font-bold text-red-200 mb-2">¡Aún no has enlazado tus cuentas!</h2>
             <p className="text-slate-300 mb-6">Para crear publicaciones, primero debes conectar al menos una red social.</p>
@@ -332,7 +332,7 @@ export default function ComposerPage() {
             </Link>
         </div>
       ) : (
-        // ✅ ESTADO NORMAL
+        // ESTADO NORMAL
         <div className="flex flex-col lg:flex-row gap-8">
 
             {/* FORMULARIO PRINCIPAL */}

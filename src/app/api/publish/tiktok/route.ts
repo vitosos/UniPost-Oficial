@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { decrypt } from "@/lib/crypto"; // 🔒 Usamos tu encriptador
+import { decrypt } from "@/lib/crypto";
 
 // Helper para construir URL absoluta (TikTok necesita descargar el video desde tu servidor)
 function buildAbsoluteUrl(pathOrUrl: string): string {
@@ -56,7 +56,7 @@ export async function publishToTikTokInternal(userId: number, postId: number, va
     const body = {
         post_info: {
             title: caption.substring(0, 2200), // Límite de TikTok
-            // ⚠️ IMPORTANTE: En modo Sandbox, 'SELF_ONLY' es obligatorio para evitar errores de permisos.
+            // En modo Sandbox, 'SELF_ONLY' es obligatorio para evitar errores de permisos.
             // Cuando pases a Producción (Live), puedes cambiarlo a 'PUBLIC_TO_EVERYONE'.
             privacy_level: "MUTUAL_FOLLOW_FRIENDS", 
             disable_duet: true,

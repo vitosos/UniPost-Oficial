@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     const did = agent.session?.did;
     if (!did) throw new Error("No DID returned from Bluesky");
 
-    // 2. 🟢 NUEVO: Obtener el perfil completo para sacar el displayName y datos iniciales
+    // 2. NUEVO: Obtener el perfil completo para sacar el displayName y datos iniciales
     const profileRes = await agent.app.bsky.actor.getProfile({
       actor: did,
     });
