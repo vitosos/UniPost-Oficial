@@ -11,6 +11,9 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  // 1. Nuevo estado para el checkbox
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -55,6 +58,13 @@ export default function RegisterPage() {
 
     if (!isPasswordValid()) {
       toast.error("❌ La contraseña no cumple con los requisitos.");
+      setLoading(false);
+      return;
+    }
+
+    // 2. Validación de Términos
+    if (!termsAccepted) {
+      toast.error("⚠️ Debes aceptar los Términos y Condiciones para continuar.");
       setLoading(false);
       return;
     }
@@ -141,7 +151,7 @@ export default function RegisterPage() {
         </div>
 
         {/* ✅ LISTA DE CONDICIONES VISUAL */}
-        <div className="mb-6 bg-black/20 p-4 rounded-xl border border-white/5">
+        <div className="mb-4 bg-black/20 p-4 rounded-xl border border-white/5">
           <p className="text-xs text-gray-400 mb-2 font-bold uppercase tracking-wide">
             Requisitos de seguridad:
           </p>
@@ -158,6 +168,46 @@ export default function RegisterPage() {
               </li>
             ))}
           </ul>
+        </div>
+
+        {/* 3. Checkbox de Términos */}
+        <div className="flex items-start gap-3 mb-6 px-1">
+            <div className="relative flex items-center">
+                <input
+                    type="checkbox"
+                    id="terms"
+                    checked={termsAccepted}
+                    onChange={(e) => setTermsAccepted(e.target.checked)}
+                    className="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-white/20 bg-black/20 transition-all checked:border-indigo-500 checked:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                />
+                <svg
+                    className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 transition-opacity peer-checked:opacity-100"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        d="M10 3L4.5 8.5L2 6"
+                        stroke="white"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    />
+                </svg>
+            </div>
+            <label htmlFor="terms" className="text-sm text-slate-300 cursor-pointer select-none leading-tight">
+                He leído y acepto los{" "}
+                <Link 
+                    href="/term_cond" 
+                    target="_blank" 
+                    className="text-indigo-400 hover:text-indigo-300 underline font-semibold transition"
+                >
+                    Términos y Condiciones
+                </Link>
+                {" "}de la plataforma.
+            </label>
         </div>
 
         <button

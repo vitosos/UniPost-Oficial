@@ -1,7 +1,10 @@
 "use client";
+
+import { useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { PublicFeed } from "@/components/PublicFeed";
 import Image from "next/image";
+import toast from "react-hot-toast"; // 👈 Importamos toast
 import UniPostLogo from "./assets/UniPost.png";
 
 // --- IMPORTACIÓN DE ÍCONOS DE REDES ---
@@ -11,8 +14,62 @@ import TtIcon from "./assets/tt.png";
 import FbIcon from "./assets/fb.png";
 
 export default function HomePage() {
+  // 1. Desestructuramos 'status' para controlar la carga inicial
+  const { data: session, status } = useSession();
+  
+  // 2. Estados para UI
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  const { data: session } = useSession();
+  // 3. Función Logout con Feedback
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    toast.loading("Cerrando sesión...", { duration: 2000 });
+    await signOut({ callbackUrl: "/" });
+  };
+
+  // 4. Componente auxiliar para los Botones de Auth (DRY)
+  const AuthButtons = ({ mobile = false }) => {
+    // A) MIENTRAS CARGA: Mostramos un placeholder (esqueleto) para evitar parpadeo
+    if (status === "loading") {
+      return (
+        <div className={`flex gap-3 ${mobile ? "flex-col w-full" : "items-center"}`}>
+          <div className="h-10 w-24 bg-white/10 animate-pulse rounded-xl"></div>
+          <div className="h-10 w-24 bg-white/10 animate-pulse rounded-xl"></div>
+        </div>
+      );
+    }
+
+    // B) SI NO HAY SESIÓN: Mostrar Login / Register
+    if (status === "unauthenticated") {
+      return (
+        <>
+          <a href="/login" className={`rounded-xl border border-white/30 px-4 py-2 font-semibold text-slate-200 backdrop-blur-sm hover:bg-white/10 transition text-center ${mobile ? "w-full" : ""}`}>
+            Iniciar sesión
+          </a>
+          <a href="/register" className={`rounded-xl bg-white px-4 py-2 font-semibold text-slate-900 shadow hover:shadow-lg transition text-center ${mobile ? "w-full" : ""}`}>
+            Registrarse
+          </a>
+        </>
+      );
+    }
+
+    // C) SI HAY SESIÓN: Mostrar Ir a App / Cerrar Sesión
+    return (
+      <>
+        <a href="/composer" className={`rounded-xl bg-white px-4 py-2 font-semibold text-slate-900 shadow hover:shadow-lg transition text-center ${mobile ? "w-full" : ""}`}>
+          Ir a la App
+        </a>
+        <button 
+          onClick={handleLogout} 
+          disabled={isLoggingOut}
+          className={`rounded-xl border border-white/30 px-4 py-2 font-semibold text-slate-200 backdrop-blur-sm hover:bg-white/10 transition text-center ${mobile ? "w-full" : ""} ${isLoggingOut ? "opacity-50 cursor-not-allowed" : ""}`}
+        >
+          {isLoggingOut ? "Cerrando..." : "Cerrar sesión"}
+        </button>
+      </>
+    );
+  };
 
   return (
     <main className="min-h-screen w-full bg-gradient-to-b from-slate-950 via-purple-950 to-slate-900 text-slate-200">
@@ -29,26 +86,49 @@ export default function HomePage() {
           />
           <span className="text-lg font-semibold tracking-wide">UniPost</span>
         </div>
+
+        {/* --- DESKTOP NAV --- */}
         <nav className="hidden items-center gap-6 text-sm md:flex">
           <a href="#feed" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Feed</a>
           <a href="#features" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Características</a>
           <a href="#about" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Sobre Nosotros</a>
 
           <div className="flex items-center gap-3 ml-4">
-            {!session ? (
-              <>
-                <a href="/login" className="rounded-xl border border-white/30 px-4 py-2 font-semibold text-slate-200 backdrop-blur-sm hover:bg-white/10 transition">Iniciar sesión</a>
-                <a href="/register" className="rounded-xl bg-white px-4 py-2 font-semibold text-slate-900 shadow hover:shadow-lg transition">Registrarse</a>
-              </>
-            ) : (
-              <>
-                <a href="/composer" className="rounded-xl bg-white px-4 py-2 font-semibold text-slate-900 shadow hover:shadow-lg transition">Ir a la App</a>
-                <button onClick={() => signOut({ callbackUrl: "/" })} className="rounded-xl border border-white/30 px-4 py-2 font-semibold text-slate-200 backdrop-blur-sm hover:bg-white/10 transition">Cerrar sesión</button>
-              </>
-            )}
+            <AuthButtons />
           </div>
         </nav>
+
+        {/* --- MOBILE HAMBURGER BUTTON --- */}
+        <button 
+          className="md:hidden p-2 text-slate-200 hover:bg-white/10 rounded-lg transition"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+        >
+          {mobileMenuOpen ? (
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            </svg>
+          )}
+        </button>
       </header>
+
+      {/* --- MOBILE MENU OVERLAY --- */}
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 top-[80px] z-40 bg-slate-950/95 backdrop-blur-xl p-6 flex flex-col gap-6 animate-in slide-in-from-top-5">
+          <nav className="flex flex-col gap-4 text-lg font-medium text-center">
+            <a href="#feed" onClick={() => setMobileMenuOpen(false)} className="py-2 border-b border-white/10 hover:text-white">Feed</a>
+            <a href="#features" onClick={() => setMobileMenuOpen(false)} className="py-2 border-b border-white/10 hover:text-white">Características</a>
+            <a href="#about" onClick={() => setMobileMenuOpen(false)} className="py-2 border-b border-white/10 hover:text-white">Sobre Nosotros</a>
+          </nav>
+          
+          <div className="flex flex-col gap-3 mt-4">
+            <AuthButtons mobile={true} />
+          </div>
+        </div>
+      )}
 
       {/* Hero Section */}
       <section className="relative mx-auto max-w-7xl px-6 pb-10 pt-10 md:pt-24 lg:pb-24">
@@ -74,13 +154,16 @@ export default function HomePage() {
               Ahorra horas cada semana con programación inteligente, publicaciones simultáneas y un flujo simple para equipos. UniPost es tu copiloto de Community Management.
             </p>
 
+            <p className="mt-5 max-w-xl text-base/7 opacity-95 sm:text-lg/8">
+              Actualmente con soporte completo para: <span className="inline-block bg-white/90 px-2 text-slate-900">Instagram Business, Facebook y Bluesky</span> disponible
+            </p>
+
             <div className="mt-8 flex flex-wrap items-center gap-4">
-              <a href="/composer" className="rounded-2xl bg-white px-8 py-4 text-lg font-bold text-slate-900 shadow-xl transition hover:scale-105 hover:shadow-2xl">Probar demo</a>
-              <a href="#features" className="rounded-2xl border-2 border-white/30 px-8 py-4 text-lg font-semibold backdrop-blur transition hover:bg-white/10 hover:border-white/50">Ver características</a>
+              <a href="#features" className="rounded-2xl bg-white px-8 py-4 text-lg font-bold text-slate-900 shadow-xl transition hover:scale-105 hover:shadow-2xl">Ver características</a>
             </div>
           </div>
 
-          {/* --- NUEVO: Collage de Redes Sociales --- */}
+          {/* Collage de Redes Sociales */}
           <div className="relative hidden md:flex items-center justify-center lg:ml-10">
             {/* Brillo de fondo */}
             <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/30 to-fuchsia-500/30 blur-[60px] rounded-full"></div>
@@ -93,7 +176,7 @@ export default function HomePage() {
                 <Image src={IgIcon} alt="Instagram" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg" />
               </div>
 
-              {/* Facebook - Arriba Derecha (desplazado) */}
+              {/* Facebook - Arriba Derecha */}
               <div className="col-start-3 row-start-1 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 rotate-[6deg] translate-y-6 hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
                 <Image src={FbIcon} alt="Facebook" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg" />
               </div>
@@ -107,7 +190,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Bluesky - Abajo Izquierda (desplazado) */}
+              {/* Bluesky - Abajo Izquierda */}
               <div className="col-start-1 row-start-3 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 rotate-[4deg] -translate-y-6 hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
                 <Image src={BskyIcon} alt="Bluesky" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg scale-95" />
               </div>
@@ -123,7 +206,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* FEED SECTION (Anclado con ID) */}
+      {/* FEED SECTION */}
       <div id="feed" className="scroll-mt-24">
         <PublicFeed />
       </div>

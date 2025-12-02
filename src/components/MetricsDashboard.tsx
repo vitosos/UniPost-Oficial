@@ -5,7 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
 import Image from "next/image";
-import { calculateHashtagPerformance, type HashtagStat } from "@/utils/analytics";
+import { calculateHashtagPerformance } from "@/utils/analytics";
 import toast from "react-hot-toast";
 
 // Importación de Logos
@@ -42,7 +42,7 @@ type SortConfig = {
 const ITEMS_PER_PAGE = 10;
 
 interface Props {
-  targetUserId?: number;
+  targetUserId?: number; // ID del usuario que estamos viendo (si es admin viendo a otro)
   userName?: string;
 }
 
@@ -184,21 +184,27 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
 
   // --- 5. ACCIONES DE USUARIO ---
   const handleRefreshMetrics = async () => {
-    if (targetUserId) {
-      toast.error("Solo el dueño puede actualizar sus datos.");
-      return;
-    }
     try {
       setSyncing(true);
       setSyncMessage(null);
-      const res = await fetch("/api/metrics/refresh", { method: "POST" });
+
+      // Enviamos el targetUserId en el body si existe
+      const payload = targetUserId ? { targetUserId } : {};
+
+      const res = await fetch("/api/metrics/refresh", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      
       const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error("Error al sincronizar");
+      if (!res.ok || !data.ok) throw new Error(data.error || "Error al sincronizar");
       
       setSyncMessage(`✅ Completado. Procesados: ${data.processed}.`);
       await loadMetrics();
     } catch (e: any) {
       setSyncMessage("❌ " + e.message);
+      toast.error(e.message);
     } finally {
       setSyncing(false);
     }
@@ -224,34 +230,33 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
   return (
     <div>
       <h1 className="text-4xl md:text-5xl font-bold mb-12 text-center tracking-tight">
-        {userName ? `Métricas de ${userName}` : "📈 Centro de Métricas"}
+        {userName ? `Métricas de ${userName}` : "Centro de Métricas Personales"}
       </h1>
 
-      {!targetUserId && (
-        <div className="max-w-5xl mx-auto mb-16 flex flex-col md:flex-row items-center justify-center gap-6">
-          <button
-            onClick={handleRefreshMetrics}
-            disabled={syncing}
-            className={`px-8 py-3 rounded-full text-sm font-bold border transition flex items-center gap-3 shadow-xl transform hover:scale-105 active:scale-95 ${
-              syncing
-                ? "bg-white/10 border-white/20 text-white/50 cursor-wait"
-                : "bg-white text-indigo-900 border-transparent hover:bg-indigo-50"
-            }`}
-          >
-            {syncing ? (
-              <span className="animate-spin text-lg">↻</span>
-            ) : (
-              <span className="text-lg">🔄</span>
-            )}
-            {syncing ? "Sincronizando..." : "Actualizar datos"}
-          </button>
-          {syncMessage && (
-            <span className="text-sm bg-black/40 px-4 py-2 rounded-lg border border-white/10 animate-in fade-in slide-in-from-bottom-2">
-              {syncMessage}
-            </span>
+      {/* --- BOTÓN DE ACTUALIZAR (Siempre visible) --- */}
+      <div className="max-w-5xl mx-auto mb-16 flex flex-col md:flex-row items-center justify-center gap-6">
+        <button
+          onClick={handleRefreshMetrics}
+          disabled={syncing}
+          className={`px-8 py-3 rounded-full text-sm font-bold border transition flex items-center gap-3 shadow-xl transform hover:scale-105 active:scale-95 ${
+            syncing
+              ? "bg-white/10 border-white/20 text-white/50 cursor-wait"
+              : "bg-white text-indigo-900 border-transparent hover:bg-indigo-50"
+          }`}
+        >
+          {syncing ? (
+            <span className="animate-spin text-lg">↻</span>
+          ) : (
+            <span className="text-lg">🔄</span>
           )}
-        </div>
-      )}
+          {syncing ? "Sincronizando..." : targetUserId ? `Actualizar datos de ${userName}` : "Actualizar mis datos"}
+        </button>
+        {syncMessage && (
+          <span className="text-sm bg-black/40 px-4 py-2 rounded-lg border border-white/10 animate-in fade-in slide-in-from-bottom-2">
+            {syncMessage}
+          </span>
+        )}
+      </div>
 
       {/* --- 1. TARJETAS DE PERFIL --- */}
       <div className="max-w-7xl mx-auto mb-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useState } from "react";
+import { useState, useEffect } from "react"; // 👈 Importamos useEffect
 import Image from "next/image";
 import UniPostLogo from "@/app/assets/UniPost.png"; 
 
@@ -14,10 +14,34 @@ export default function DashboardSidebar({
 }) {
   const pathname = usePathname();
   
-  // Estado para colapsar en Desktop (Ancho)
   const [desktopOpen, setDesktopOpen] = useState(true);
-  // Estado para abrir/cerrar en Móvil (Overlay)
   const [mobileOpen, setMobileOpen] = useState(false);
+  
+  // 1. Estado para el contador de borradores
+  const [draftCount, setDraftCount] = useState(0);
+
+  // 2. Efecto para obtener los posts y contar los DRAFT
+  useEffect(() => {
+    async function fetchDrafts() {
+      try {
+        const res = await fetch("/api/posts");
+        const json = await res.json();
+        if (json.ok) {
+          // Filtramos solo los que tienen status "DRAFT"
+          const drafts = json.data.filter((p: any) => p.status === "DRAFT");
+          setDraftCount(drafts.length);
+        }
+      } catch (error) {
+        console.error("Error fetching drafts count:", error);
+      }
+    }
+
+    fetchDrafts();
+    
+    // Opcional: Podrías poner un intervalo si quieres que se actualice solo
+    // const interval = setInterval(fetchDrafts, 30000);
+    // return () => clearInterval(interval);
+  }, []); // Se ejecuta al montar el componente
 
   const menuItems = [
     { href: "/", label: "🏠 Inicio" },
@@ -31,8 +55,7 @@ export default function DashboardSidebar({
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-900 text-slate-200">
       
-      {/* --- 1. BACKDROP OSCURO (Solo Móvil) --- */}
-      {/* Oscurece el fondo cuando abres el menú en el celular */}
+      {/* Backdrop Móvil */}
       {mobileOpen && (
         <div 
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden transition-opacity"
@@ -40,23 +63,18 @@ export default function DashboardSidebar({
         />
       )}
 
-      {/* --- 2. SIDEBAR --- */}
+      {/* SIDEBAR */}
       <aside
         className={`
           fixed md:relative z-50 h-screen flex flex-col justify-between p-4 
           transition-all duration-300 backdrop-blur-xl bg-slate-950/90 md:bg-white/5 border-r border-white/10 shadow-2xl
-          
-          /* Lógica Móvil: Slide desde la izquierda */
           ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
-          
-          /* Lógica Desktop: Ancho variable */
           ${desktopOpen ? "md:w-64" : "md:w-20"}
-          
-          w-64 /* Ancho fijo cuando está abierto en móvil */
+          w-64
         `}
       >
         
-        {/* Botón colapsar (Solo visible en Desktop) */}
+        {/* Botón colapsar (Desktop) */}
         <button
           onClick={() => setDesktopOpen(!desktopOpen)}
           className="hidden md:block absolute -right-3 top-10 bg-slate-800 text-indigo-400 rounded-full p-1 shadow-md hover:bg-slate-700 transition z-50 border border-indigo-500/30"
@@ -66,7 +84,7 @@ export default function DashboardSidebar({
           </svg>
         </button>
 
-        {/* Botón Cerrar (Solo visible en Móvil dentro del menú) */}
+        {/* Botón Cerrar (Móvil) */}
          <button
           onClick={() => setMobileOpen(false)}
           className="md:hidden absolute right-4 top-4 text-slate-400 hover:text-white p-1"
@@ -88,7 +106,6 @@ export default function DashboardSidebar({
               <Link
                 key={item.href}
                 href={item.href}
-                // En móvil cerramos el menú al hacer click. En desktop no hace nada.
                 onClick={() => setMobileOpen(false)} 
                 className={`flex items-center rounded-lg transition-all duration-200 group relative 
                   ${desktopOpen ? "px-4 py-3 gap-3" : "md:justify-center md:py-3 md:px-2 px-4 py-3 gap-3"} 
@@ -96,14 +113,26 @@ export default function DashboardSidebar({
                 `}
               >
                 <span className="text-xl leading-none">{item.label.split(" ")[0]}</span>
-                <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${desktopOpen ? "w-auto opacity-100" : "md:w-0 md:opacity-0 w-auto opacity-100"}`}>
-                  {item.label.split(" ").slice(1).join(" ")}
-                </span>
                 
-                {/* Tooltip solo para Desktop colapsado */}
+                <div className={`flex items-center justify-between flex-1 overflow-hidden transition-all duration-300 ${desktopOpen ? "w-auto opacity-100" : "md:w-0 md:opacity-0 w-auto opacity-100"}`}>
+                  <span className="whitespace-nowrap">
+                    {item.label.split(" ").slice(1).join(" ")}
+                  </span>
+
+                  {/* 3. Implementación del Badge de Borradores */}
+                  {item.href === "/publicaciones" && draftCount > 0 && desktopOpen && (
+                    <span className="ml-2 bg-yellow-500/20 text-yellow-200 text-[10px] font-bold px-2 py-0.5 rounded-full border border-yellow-500/30 animate-in fade-in zoom-in">
+                      {draftCount}
+                    </span>
+                  )}
+                </div>
+                
+                {/* Tooltip para Desktop colapsado */}
                 {!desktopOpen && (
                   <div className="hidden md:block absolute left-full ml-2 px-2 py-1 bg-slate-900 border border-white/10 text-xs text-slate-200 rounded opacity-0 group-hover:opacity-100 transition whitespace-nowrap z-50 pointer-events-none shadow-xl">
-                    {item.label.split(" ").slice(1).join(" ")}
+                    {item.label.split(" ").slice(1).join(" ")} 
+                    {/* Opcional: Mostrar contador en tooltip también */}
+                    {item.href === "/publicaciones" && draftCount > 0 && ` (${draftCount})`}
                   </div>
                 )}
               </Link>
@@ -113,7 +142,6 @@ export default function DashboardSidebar({
 
         {/* Footer del Sidebar */}
         <div className="border-t border-white/10 pt-4">
-            {/* Link Términos */}
             <div className={`flex justify-center overflow-hidden transition-all duration-300 ${desktopOpen ? "max-h-10 mb-3 opacity-100" : "md:max-h-0 md:mb-0 md:opacity-0 max-h-10 mb-3 opacity-100"}`}>
                 <Link href="/terminos" onClick={() => setMobileOpen(false)} className="text-xs text-slate-500 hover:text-slate-300 underline transition-colors decoration-slate-700 hover:decoration-slate-400">
                     Términos de Contenido
@@ -127,10 +155,9 @@ export default function DashboardSidebar({
         </div>
       </aside>
 
-      {/* --- 3. CONTENIDO PRINCIPAL --- */}
+      {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        
-        {/* Header Móvil (Hamburger) - Solo visible en móvil */}
+        {/* Header Móvil */}
         <div className="md:hidden px-4 py-3 flex items-center justify-between bg-slate-950/50 backdrop-blur-md border-b border-white/10 sticky top-0 z-30">
             <div className="flex items-center gap-3">
                 <button onClick={() => setMobileOpen(true)} className="p-2 text-slate-200 hover:bg-white/10 rounded-lg active:scale-95 transition">
@@ -140,10 +167,8 @@ export default function DashboardSidebar({
                 </button>
                 <span className="font-bold text-lg text-slate-100 tracking-wide">UniPost</span>
             </div>
-            {/* Aquí podrías poner la foto de perfil pequeña si quisieras */}
         </div>
 
-        {/* Área de Scroll */}
         <div className="flex-1 overflow-y-auto p-4 md:p-10 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
             {children}
         </div>

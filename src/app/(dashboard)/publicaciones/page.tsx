@@ -1,10 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
-import Image from "next/image"; // 👈 Importamos componente de imagen
-import UniPostLogo from "../../assets/UniPost.png"; // 👈 Importamos el logo
+import Image from "next/image";
+import UniPostLogo from "../../assets/UniPost.png";
+import BskyIcon from "@/app/assets/bsky.png";
+import IgIcon from "@/app/assets/ig.png";
+import FbIcon from "@/app/assets/fb.png";
+import TtIcon from "@/app/assets/tt.png";
 
 // TIPOS
 type Variant = {
@@ -40,6 +44,24 @@ type Post = {
   schedule?: Schedule | null;
 };
 
+const ITEMS_PER_PAGE = 5;
+
+// Constantes para filtros
+const STATUS_OPTIONS = [
+  { label: "Todos los estados", value: "ALL" },
+  { label: "Borrador (Draft)", value: "DRAFT" },
+  { label: "Programado", value: "SCHEDULED" },
+  { label: "Publicado", value: "PUBLISHED" },
+];
+
+const NETWORK_OPTIONS = [
+  { label: "Todas las redes", value: "ALL" },
+  { label: "Instagram", value: "INSTAGRAM" },
+  { label: "Facebook", value: "FACEBOOK" },
+  { label: "Bluesky", value: "BLUESKY" },
+  { label: "TikTok", value: "TIKTOK" },
+];
+
 export default function PublicacionesPage() {
   const { data: session } = useSession();
   const [posts, setPosts] = useState<Post[]>([]);
@@ -49,6 +71,15 @@ export default function PublicacionesPage() {
   const [processing, setProcessing] = useState<{ [key: number]: boolean }>({});
   const [publishingAll, setPublishingAll] = useState<{ [postId: number]: boolean }>({});
 
+  // Estado para guardar cambios de texto (loading por variante)
+  const [savingVariant, setSavingVariant] = useState<{ [variantId: number]: boolean }>({});
+
+  // Estados de Filtros
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [networkFilter, setNetworkFilter] = useState("ALL");
+
+  const [currentPage, setCurrentPage] = useState(1);
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -56,6 +87,11 @@ export default function PublicacionesPage() {
     const timer = setInterval(() => setTick(t => t + 1), 60000);
     return () => clearInterval(timer);
   }, []);
+
+  // Resetear página al cambiar cualquier filtro
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, networkFilter]);
 
   async function fetchPosts() {
     setLoading(true);
@@ -68,6 +104,30 @@ export default function PublicacionesPage() {
       toast.error("Error cargando publicaciones");
     } finally {
       setLoading(false);
+    }
+  }
+
+  // --- LÓGICA DE GUARDADO DE VARIANTE ---
+  async function handleSaveVariantText(variantId: number, text: string) {
+    setSavingVariant(prev => ({ ...prev, [variantId]: true }));
+    try {
+      const res = await fetch("/api/posts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variantId, text }),
+      });
+      const json = await res.json();
+
+      if (json.ok) {
+        toast.success("Cambios guardados");
+      } else {
+        throw new Error(json.error);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Error al guardar cambios");
+    } finally {
+      setSavingVariant(prev => ({ ...prev, [variantId]: false }));
     }
   }
 
@@ -94,6 +154,7 @@ export default function PublicacionesPage() {
       if (variant.network === "BLUESKY") endpoint = "/api/publish/bluesky";
       else if (variant.network === "INSTAGRAM") endpoint = "/api/publish/instagram";
       else if (variant.network === "FACEBOOK") endpoint = "/api/publish/facebook";
+      else if (variant.network === "TIKTOK") endpoint = "/api/publish/tiktok";
       else throw new Error("Red no soportada");
 
       const res = await fetch(endpoint, {
@@ -167,11 +228,34 @@ export default function PublicacionesPage() {
 
   function isVideoBase64(base64?: string) { return base64?.startsWith("data:video"); }
 
+  // --- LÓGICA DE FILTRADO MEMOIZADA ---
+  const filteredPosts = useMemo(() => {
+    return posts.filter(p => {
+      // 1. Filtro Texto
+      const matchText = p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.body.toLowerCase().includes(searchTerm.toLowerCase());
+
+      // 2. Filtro Estado
+      const matchStatus = statusFilter === "ALL" || p.status === statusFilter;
+
+      // 3. Filtro Red (Si el post tiene AL MENOS una variante de esa red)
+      const matchNetwork = networkFilter === "ALL" || p.variants.some(v => v.network === networkFilter);
+
+      return matchText && matchStatus && matchNetwork;
+    });
+  }, [posts, searchTerm, statusFilter, networkFilter]);
+
+  const totalPages = Math.ceil(filteredPosts.length / ITEMS_PER_PAGE);
+  const displayedPosts = filteredPosts.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
   return (
     <div className="max-w-5xl mx-auto">
 
       {/* Header */}
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
         <h1 className="text-3xl font-bold">📋 Biblioteca de Publicaciones</h1>
         <div className="flex gap-4">
           <a href="/composer" className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg font-bold transition">+ Crear Nueva</a>
@@ -179,24 +263,99 @@ export default function PublicacionesPage() {
         </div>
       </div>
 
-      {loading ? <p className="text-center animate-pulse">Cargando publicaciones...</p> : posts.length === 0 ? (
+      {/* BARRA DE FILTROS Y BÚSQUEDA */}
+      <div className="mb-8 p-4 bg-white/5 border border-white/10 rounded-2xl flex flex-col md:flex-row gap-4">
+        {/* Buscador */}
+        <div className="flex-1">
+          <input
+            type="text"
+            placeholder="🔍 Buscar por título o contenido..."
+            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500/50 transition h-full"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        {/* Filtro Estado */}
+        <div className="md:w-48">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 text-slate-200 focus:outline-none focus:border-purple-500/50 cursor-pointer"
+          >
+            {STATUS_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Filtro Red */}
+        <div className="md:w-48">
+          <select
+            value={networkFilter}
+            onChange={(e) => setNetworkFilter(e.target.value)}
+            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 text-slate-200 focus:outline-none focus:border-purple-500/50 cursor-pointer"
+          >
+            {NETWORK_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {loading ? <p className="text-center animate-pulse">Cargando publicaciones...</p> : filteredPosts.length === 0 ? (
         <div className="text-center py-20 bg-white/5 rounded-2xl border border-white/10">
-          <p className="text-xl text-slate-200/70">No hay publicaciones aún.</p>
-          <a href="/composer" className="text-purple-300 underline mt-2 block">Crea la primera aquí</a>
+          <p className="text-xl text-slate-200/70">No se encontraron resultados con estos filtros.</p>
+          <button
+            onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); setNetworkFilter("ALL"); }}
+            className="text-purple-300 underline mt-2 block w-full"
+          >
+            Limpiar filtros
+          </button>
         </div>
       ) : (
         <div className="space-y-6">
-          {posts.map((p) => {
+          {displayedPosts.map((p) => {
             const mediaList = p.medias || [];
             const totalMedia = mediaList.length;
             const currentIndex = postMediaIndex[p.id] ?? 0;
             const currentMedia = totalMedia > 0 ? mediaList[Math.min(Math.max(currentIndex, 0), totalMedia - 1)] : null;
             const scheduleInfo = p.schedule ? getScheduleDisplay(p.schedule.runAt) : null;
+            const uniqueNetworks = Array.from(new Set(p.variants.map(v => v.network)));
 
             return (
-              <div key={p.id} className="backdrop-blur-xl bg-white/10 border border-white/20 p-6 rounded-xl shadow-lg">
+              <div key={p.id} className="backdrop-blur-xl bg-white/5 border border-white/10 p-6 rounded-xl shadow-lg hover:border-white/20 transition">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
-                  <h3 className="text-xl font-bold truncate max-w-md">{p.title}</h3>
+
+                  {/* Título + Íconos de Redes */}
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <h3 className="text-xl font-bold truncate max-w-xs text-white" title={p.title}>
+                      {p.title}
+                    </h3>
+
+                    {/* Lista de Iconos */}
+                    <div className="flex -space-x-2 hover:space-x-1 transition-all duration-300 pl-2">
+                      {uniqueNetworks.map((net) => {
+                        let iconSrc = null;
+                        if (net === "BLUESKY") iconSrc = BskyIcon;
+                        if (net === "INSTAGRAM") iconSrc = IgIcon;
+                        if (net === "FACEBOOK") iconSrc = FbIcon;
+                        if (net === "TIKTOK") iconSrc = TtIcon;
+
+                        if (!iconSrc) return null;
+
+                        return (
+                          <div
+                            key={net}
+                            className="relative w-6 h-6 z-0 hover:z-10 hover:scale-125 transition-transform drop-shadow-md"
+                            title={net}
+                          >
+                            <Image src={iconSrc} alt={net} fill className="object-contain" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
 
                   <div className="flex items-center gap-3 flex-wrap justify-end">
                     {p.status === "SCHEDULED" && scheduleInfo && (
@@ -213,17 +372,16 @@ export default function PublicacionesPage() {
                       {p.status}
                     </span>
 
-                    {/* 🚀 BOTÓN MAESTRO: ENVIAR TODAS CON LOGO */}
+                    {/* 🚀 BOTÓN MAESTRO */}
                     <button
                       onClick={() => handlePublishAll(p)}
                       disabled={publishingAll[p.id] || p.variants.every(v => v.status === "PUBLISHED")}
-                      className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:opacity-50 text-slate-200 px-4 py-1.5 rounded-lg font-bold text-sm shadow-md transition flex items-center gap-2"
+                      className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:opacity-50 text-slate-200 px-4 py-1.5 rounded-lg font-bold text-sm shadow-md transition flex items-center gap-2"
                     >
                       {publishingAll[p.id] ? (
                         <><span className="animate-spin">↻</span> Enviando...</>
                       ) : (
                         <>
-                          {/* 👇 AQUÍ ESTÁ EL LOGO */}
                           <Image src={UniPostLogo} alt="Logo" width={20} height={20} className="w-5 h-5 object-contain" />
                           Enviar Todas
                         </>
@@ -232,11 +390,11 @@ export default function PublicacionesPage() {
                   </div>
                 </div>
 
-                <p className="text-slate-200/80 mb-4 whitespace-pre-wrap">{p.body}</p>
+                <p className="text-slate-300 mb-4 whitespace-pre-wrap">{p.body}</p>
 
                 {/* MEDIA VIEWER */}
                 {currentMedia && (
-                  <div className="mt-3 rounded-xl overflow-hidden border border-white/20 bg-black/40 p-2 flex flex-col items-center">
+                  <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-black/40 p-2 flex flex-col items-center">
                     {currentMedia.type === "VIDEO" || currentMedia.mime.startsWith("video") ? (
                       <video src={currentMedia.mediaLocation} controls className="max-h-[300px] rounded-lg object-contain" />
                     ) : (
@@ -244,16 +402,16 @@ export default function PublicacionesPage() {
                     )}
                     {totalMedia > 1 && (
                       <div className="flex items-center gap-3 mt-3">
-                        <button onClick={() => movePostMedia(p.id, "left", totalMedia)} disabled={currentIndex === 0} className="px-3 py-1 bg-white/20 rounded disabled:opacity-30">◀</button>
-                        <span className="text-xs text-gray-300">{currentIndex + 1} / {totalMedia}</span>
-                        <button onClick={() => movePostMedia(p.id, "right", totalMedia)} disabled={currentIndex === totalMedia - 1} className="px-3 py-1 bg-white/20 rounded disabled:opacity-30">▶</button>
+                        <button onClick={() => movePostMedia(p.id, "left", totalMedia)} disabled={currentIndex === 0} className="px-3 py-1 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20">◀</button>
+                        <span className="text-xs text-gray-400">{currentIndex + 1} / {totalMedia}</span>
+                        <button onClick={() => movePostMedia(p.id, "right", totalMedia)} disabled={currentIndex === totalMedia - 1} className="px-3 py-1 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20">▶</button>
                       </div>
                     )}
                   </div>
                 )}
 
                 {!currentMedia && p.mediaBase64 && (
-                  <div className="mt-3 rounded-xl overflow-hidden border border-white/20 bg-black/40 p-2 flex justify-center">
+                  <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-black/40 p-2 flex justify-center">
                     {isVideoBase64(p.mediaBase64) ? (
                       <video src={p.mediaBase64} controls className="max-h-[300px]" />
                     ) : (
@@ -265,29 +423,65 @@ export default function PublicacionesPage() {
                 {/* VARIANTES */}
                 <div className="space-y-3 mt-6">
                   {p.variants.map((v, i) => (
-                    <div key={i} className="flex flex-col md:flex-row gap-4 bg-white/5 border border-white/10 p-4 rounded-lg">
-                      <div className="flex-1">
+                    <div key={i} className="flex flex-col md:flex-row gap-4 bg-black/20 border border-white/5 p-4 rounded-lg">
+                      <div className="flex-1 group">
+
+                        {/* Cabecera: Red + Estado */}
                         <div className="flex items-center gap-2 mb-2">
-                          <span className="font-bold text-sm uppercase tracking-wider">{v.network}</span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded ${v.status === "PUBLISHED" ? "bg-green-500/20 text-green-200" : "bg-white/10"}`}>
+                          <span className="font-bold text-sm uppercase tracking-wider text-slate-300">{v.network}</span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded ${v.status === "PUBLISHED"
+                              ? "bg-green-500/20 text-green-200"
+                              : "bg-white/10 text-slate-400"
+                            }`}>
                             {v.status || "DRAFT"}
                           </span>
                         </div>
+
+                        {/* Área de Texto + Botón Guardar */}
                         {v.status !== "PUBLISHED" ? (
-                          <textarea value={v.text} onChange={(e) => handleExistingVariantTextChange(p.id, v.id, e.target.value)} className="w-full text-sm text-gray-200 bg-black/20 border border-white/10 rounded p-2 resize-none focus:border-purple-500 outline-none transition" rows={2} />
+                          <div>
+                            <textarea
+                              value={v.text}
+                              onChange={(e) => handleExistingVariantTextChange(p.id, v.id, e.target.value)}
+                              className="w-full text-sm text-slate-200 bg-black/40 border border-white/10 rounded p-3 resize-none focus:border-purple-500 outline-none transition placeholder-white/20 focus:bg-black/60"
+                              rows={3}
+                              placeholder="Escribe el contenido..."
+                            />
+
+                            {/* Botón Guardar (Fuera del textarea) */}
+                            {v.id && (
+                              <div className="flex justify-end mt-2">
+                                <button
+                                  onClick={() => handleSaveVariantText(v.id!, v.text)}
+                                  disabled={savingVariant[v.id!]}
+                                  className="text-xs flex items-center gap-2 bg-white/5 hover:bg-green-600/80 text-slate-400 hover:text-white px-3 py-1.5 rounded-md transition border border-white/10"
+                                  title="Guardar cambios de texto"
+                                >
+                                  {savingVariant[v.id!] ? (
+                                    <>Guardando... <span className="animate-spin">↻</span></>
+                                  ) : (
+                                    <>Guardar texto 💾</>
+                                  )}
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         ) : (
-                          <p className="text-sm text-gray-300 italic">"{v.text}"</p>
+                          <p className="text-sm text-slate-400 italic p-2 border border-transparent">"{v.text}"</p>
                         )}
                       </div>
 
-                      <div className="flex items-center">
+                      {/* Botón Publicar (Columna Derecha) */}
+                      <div className="flex items-start pt-8 md:pt-0">
                         <button
                           onClick={() => handlePublishVariant(p, v)}
                           disabled={v.status === "PUBLISHED" || processing[v.id!]}
-                          className={`px-4 py-2 rounded font-bold text-sm shadow-lg transition w-32 flex justify-center ${v.status === "PUBLISHED" ? "bg-gray-600 cursor-not-allowed opacity-50" :
-                              v.network === "BLUESKY" ? "bg-sky-600 hover:bg-sky-500" :
-                                v.network === "INSTAGRAM" ? "bg-pink-600 hover:bg-pink-500" :
-                                  v.network === "FACEBOOK" ? "bg-blue-600 hover:bg-blue-500" : "bg-gray-500"
+                          className={`px-4 py-2 rounded font-bold text-sm shadow-lg transition w-32 flex justify-center ${v.status === "PUBLISHED" ? "bg-gray-700 cursor-not-allowed opacity-50 text-slate-400" :
+                              v.network === "BLUESKY" ? "bg-sky-600 hover:bg-sky-500 text-white" :
+                                v.network === "INSTAGRAM" ? "bg-pink-600 hover:bg-pink-500 text-white" :
+                                  v.network === "FACEBOOK" ? "bg-blue-600 hover:bg-blue-500 text-white" :
+                                    v.network === "TIKTOK" ? "bg-black border border-cyan-500/30 hover:bg-gray-900 text-white" :
+                                      "bg-gray-500"
                             }`}
                         >
                           {v.status === "PUBLISHED" ? "Publicado" :
@@ -299,13 +493,37 @@ export default function PublicacionesPage() {
                 </div>
 
                 <div className="mt-4 flex justify-end border-t border-white/10 pt-4">
-                  <button onClick={() => handleDelete(p.id)} className="text-red-300 hover:text-red-100 text-sm font-semibold transition">🗑️ Eliminar publicación</button>
+                  <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-300 text-sm font-semibold transition flex items-center gap-1">
+                    🗑️ Eliminar publicación
+                  </button>
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Paginación */}
+      {totalPages > 1 && (
+        <div className="mt-8 flex justify-center items-center gap-4">
+          <button
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="px-4 py-2 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20 transition text-sm"
+          >
+            ◀ Anterior
+          </button>
+          <span className="text-sm text-slate-400">Página {currentPage} de {totalPages}</span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="px-4 py-2 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20 transition text-sm"
+          >
+            Siguiente ▶
+          </button>
+        </div>
+      )}
+
     </div>
   );
 }

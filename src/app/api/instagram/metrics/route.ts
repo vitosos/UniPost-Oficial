@@ -5,66 +5,63 @@ import { decrypt } from "@/lib/crypto";
 
 const GRAPH_BASE_URL = "https://graph.facebook.com/v21.0";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession();
     if (!session?.user?.email) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-    if (!user) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
+    // 1. Determinar ID del usuario (Prioridad: Query Param > Sesión)
+    const { searchParams } = new URL(req.url);
+    const queryId = searchParams.get("userId");
+    let targetUserId: number;
 
-    // 1. Obtener Credenciales de INSTAGRAM (RedSocial 2)
+    if (queryId) {
+      targetUserId = Number(queryId);
+    } else {
+      const currentUser = await prisma.user.findUnique({ where: { email: session.user.email } });
+      if (!currentUser) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
+      targetUserId = currentUser.id;
+    }
+
+    // 2. Obtener Credenciales usando targetUserId
     const igAccess = await prisma.instagram_Access.findFirst({
-      where: { userId: user.id, redSocial: 2 },
+      where: { userId: targetUserId, redSocial: 2 },
     });
 
     if (!igAccess || !igAccess.accessToken) {
-      return NextResponse.json({ ok: false, error: "Instagram no conectado" }, { status: 400 });
+      return NextResponse.json({ ok: false, error: "Instagram no conectado" }); // Return soft error
     }
 
-    // 🔐 Desencriptar
     const userToken = decrypt(igAccess.accessToken);
 
-    // 2. Obtener la cuenta de Instagram Business
-    // A diferencia de FB, aquí necesitamos el ID específico de "instagram_business_account"
+    // 3. Obtener cuenta de Instagram Business
     const accountsRes = await fetch(
       `${GRAPH_BASE_URL}/me/accounts?fields=name,access_token,instagram_business_account{id}&access_token=${userToken}`
     );
     const accounts = await accountsRes.json();
-
-    // Buscamos la página que tenga el campo instagram_business_account lleno
     const pageWithIg = accounts.data?.find((p: any) => p.instagram_business_account?.id);
 
     if (!pageWithIg) {
-      return NextResponse.json({ ok: false, error: "No se encontró cuenta de Instagram Business vinculada." });
+      return NextResponse.json({ ok: false, error: "No IG Business account linked." });
     }
 
     const igUserId = pageWithIg.instagram_business_account.id;
-    const pageAccessToken = pageWithIg.access_token; // Usamos el token de la página para más permisos
+    const pageAccessToken = pageWithIg.access_token;
 
-    // 3. Obtener Feed de Instagram (MEDIA)
-    // ⚠️ CAMBIO IMPORTANTE: Pedimos 'permalink' explícitamente
+    // 4. Obtener Feed
     const fields = "id,caption,permalink,timestamp,like_count,comments_count,media_type,media_product_type";
     const mediaUrl = `${GRAPH_BASE_URL}/${igUserId}/media?fields=${fields}&limit=100&access_token=${pageAccessToken}`;
-
-    console.log("📡 Fetching REAL Instagram Media...");
     
     const mediaRes = await fetch(mediaUrl);
     const mediaData = await mediaRes.json();
 
-    if (mediaData.error) {
-        console.error("❌ IG API Error:", mediaData.error);
-        throw new Error(mediaData.error.message);
-    }
+    if (mediaData.error) throw new Error(mediaData.error.message);
 
-    const dataList = mediaData.data || [];
-
-    // 4. Formatear
-    const posts = dataList.map((p: any) => ({
-        id: p.id,             // ID de Instagram (ej: 179...)
-        permalink: p.permalink, // URL (ej: https://instagram.com/p/CODE/)
+    const posts = (mediaData.data || []).map((p: any) => ({
+        id: p.id,
+        permalink: p.permalink,
         caption: p.caption || "",
         createdAt: p.timestamp,
         likes: p.like_count || 0,

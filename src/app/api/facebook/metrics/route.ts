@@ -5,29 +5,38 @@ import { decrypt } from "@/lib/crypto";
 
 const GRAPH_BASE_URL = "https://graph.facebook.com/v21.0";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession();
     if (!session?.user?.email) return NextResponse.json({ ok: false }, { status: 401 });
 
-    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-    if (!user) return NextResponse.json({ ok: false }, { status: 404 });
+    // 1. Determinar ID del usuario (Prioridad: Query Param > Sesión)
+    const { searchParams } = new URL(req.url);
+    const queryId = searchParams.get("userId");
+    let targetUserId: number;
 
-    // 1. Credenciales
-    const fbAccess = await prisma.facebook_Access.findFirst({ where: { userId: user.id, redSocial: 3 } });
-    if (!fbAccess) throw new Error("Facebook no conectado");
+    if (queryId) {
+      targetUserId = Number(queryId);
+    } else {
+      const currentUser = await prisma.user.findUnique({ where: { email: session.user.email } });
+      if (!currentUser) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
+      targetUserId = currentUser.id;
+    }
+
+    // 2. Credenciales
+    const fbAccess = await prisma.facebook_Access.findFirst({ where: { userId: targetUserId, redSocial: 3 } });
+    if (!fbAccess) return NextResponse.json({ ok: false, error: "Facebook no conectado" });
 
     const userToken = decrypt(fbAccess.accessToken!);
 
-    // 2. Obtener Página
+    // 3. Obtener Página
     const accountsRes = await fetch(`${GRAPH_BASE_URL}/me/accounts?access_token=${userToken}`);
     const accounts = await accountsRes.json();
-    const page = accounts.data?.[0]; // Usamos la primera página
+    const page = accounts.data?.[0]; // Usamos la primera página (igual que en publish)
 
-    if (!page) throw new Error("No se encontró página de Facebook");
+    if (!page) throw new Error("No Facebook Page found");
 
-    // 3. Obtener Feed de la Página
-    // likes.summary(true) nos da el total real
+    // 4. Obtener Feed
     const fields = "id,created_time,shares,likes.summary(true).limit(0),comments.summary(true).limit(0)";
     const feedUrl = `${GRAPH_BASE_URL}/${page.id}/feed?fields=${fields}&limit=100&access_token=${page.access_token}`;
 
@@ -37,7 +46,7 @@ export async function GET() {
     if (data.error) throw new Error(data.error.message);
 
     const posts = (data.data || []).map((p: any) => ({
-        id: p.id, // Formato esperado: "PageID_PostID" (ej: 923..._122...)
+        id: p.id,
         likes: p.likes?.summary?.total_count || 0,
         comments: p.comments?.summary?.total_count || 0,
         shares: p.shares?.count || 0,

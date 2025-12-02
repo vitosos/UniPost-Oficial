@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Image from "next/image";
 
-// Importación de Logos para el fondo
+// Importación de Logos
 import BskyIcon from "@/app/assets/bsky.png";
 import IgIcon from "@/app/assets/ig.png";
 import FbIcon from "@/app/assets/fb.png";
@@ -57,7 +57,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
   const [ttRefreshDisabled, setTtRefreshDisabled] = useState(false);
   const [ttExpired, setTtExpired] = useState(false);
 
-
   // --- EFECTOS ---
   useEffect(() => {
     if (!userEmail) return;
@@ -69,8 +68,11 @@ export default function CuentasConectadas({ userEmail }: Props) {
         const data = await res.json();
         if (data.ok && data.linked) {
           setLinked(true);
-          setLinkedUser(data.handle);
+          setLinkedUser(data.handle); 
           loadProfile().finally(() => setCheckingProfile(false));
+        } else {
+          // Si no está vinculado, dejamos checkingProfile en true para la próxima vez
+          // pero checkingLinkStatus pasa a false abajo para mostrar el form.
         }
       } catch (e) { console.error(e); } 
       finally { setCheckingLinkStatus(false); }
@@ -112,7 +114,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
         if (data.ok && data.linked) {
           setTtLinked(true);
           setTtUsername(data.username || "TikTok User");
-          
           if (data.expired) {
             setTtExpired(true);
             setTtCheckingProfile(false);
@@ -124,8 +125,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
       } catch (err) { console.error(err); } 
       finally { setTtCheckingStatus(false); }
     })();
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmail]);
 
   // --- FUNCIONES BLUESKY ---
@@ -142,8 +141,11 @@ export default function CuentasConectadas({ userEmail }: Props) {
       if (data.ok) {
         setStatus("✅ Cuenta Bluesky vinculada");
         setLinked(true);
-        setLinkedUser(identifier);
-        loadProfile();
+        
+        // 🟢 CORRECCIÓN: Forzar carga de perfil y apagar loading
+        setCheckingProfile(true);
+        await loadProfile(); 
+        setCheckingProfile(false); // Ahora sí se mostrará la tarjeta
       } else {
         setStatus("❌ Error: " + (data.error || "Credenciales inválidas"));
       }
@@ -167,9 +169,14 @@ export default function CuentasConectadas({ userEmail }: Props) {
   }
 
   async function loadProfile() {
-    const res = await fetch("/api/bsky/profile");
-    const data = await res.json();
-    if (data.ok) setProfile(data.profile);
+    try {
+      const res = await fetch("/api/bsky/profile");
+      const data = await res.json();
+      if (data.ok && data.profile) {
+        setProfile(data.profile);
+        setLinkedUser(data.profile.handle); // 🟢 Actualizamos el usuario con el handle real
+      }
+    } catch (e) { console.error(e); }
   }
 
   async function handleRefresh() {
@@ -305,7 +312,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
       
       {/* 1. BLUESKY */}
       <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        {/* Fondo Logo */}
         <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
             <Image src={BskyIcon} alt="Bluesky" width={120} height={120} />
         </div>
@@ -357,7 +363,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
 
       {/* 2. FACEBOOK */}
       <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        {/* Fondo Logo */}
         <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
             <Image src={FbIcon} alt="Facebook" width={120} height={120} />
         </div>
@@ -405,7 +410,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
 
       {/* 3. INSTAGRAM */}
       <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        {/* Fondo Logo */}
         <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
             <Image src={IgIcon} alt="Instagram" width={120} height={120} />
         </div>
@@ -453,7 +457,6 @@ export default function CuentasConectadas({ userEmail }: Props) {
 
       {/* 4. TIKTOK */}
       <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        {/* Fondo Logo */}
         <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
             <Image src={TtIcon} alt="TikTok" width={120} height={120} />
         </div>

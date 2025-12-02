@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcrypt";
 import { NextResponse } from "next/server";
-import { sendVerificationEmail } from "@/lib/mailer"; // Asegúrate de tener esta función
+import { sendVerificationEmail } from "@/lib/mailer";
 
 export async function POST(req: Request) {
   const { email, password, name } = await req.json();
@@ -15,27 +15,31 @@ export async function POST(req: Request) {
   // Hashear la contraseña
   const hashed = await bcrypt.hash(password, 10);
 
-  // Crear el usuario en la base de datos
+  // Crear el usuario
   const user = await prisma.user.create({
     data: { email, password: hashed, name, emailVerified: null, roleID: 1 },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-    },
+    select: { id: true, name: true, email: true },
   });
 
-  // Generar el código de verificación (6 dígitos)
+  // Generar código
   const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-  // Guardar el código en la base de datos
+  // 🧹 LIMPIEZA: Borrar tokens anteriores de este email si existieran (ej: registros fallidos previos)
+  await prisma.verificationToken.deleteMany({
+    where: { identifier: email },
+  });
+
+  // Guardar el nuevo código
   await prisma.verificationToken.create({
     data: {
       identifier: email,
       token: code,
-      expires: new Date(Date.now() + 10 * 60 * 1000), // 10 minutos de expiración
+      expires: new Date(Date.now() + 10 * 60 * 1000), // 10 min
     },
   });
+
+  // Enviar correo (puede ser asíncrono para no bloquear la respuesta)
+  await sendVerificationEmail(email, code);
 
   return NextResponse.json({ ok: true, user });
 }

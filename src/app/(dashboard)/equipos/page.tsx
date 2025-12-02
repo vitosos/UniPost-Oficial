@@ -22,8 +22,8 @@ type Member = {
     id: number;
     name: string;
     email: string;
-    roleId: number;
-    roleName: string;
+    globalRoleId: number; // Rol del sistema (1-5)
+    membershipRole: string; // Rol en la org ("Miembro" | "Manager")
     totalPosts: number;
     totalLikes: number;
     image?: string | null;
@@ -38,7 +38,7 @@ type OrphanUser = {
 
 // Configuración de ordenamiento
 type SortConfig = {
-    key: keyof Member | "efficiency"; // keys de Member o 'efficiency' calculada
+    key: keyof Member | "efficiency"; 
     direction: "asc" | "desc";
 };
 
@@ -46,9 +46,11 @@ export default function EquiposPage() {
     const { data: session } = useSession();
 
     const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
     const [isCreatingOrg, setIsCreatingOrg] = useState(false);
+    
+    // Permisos
     const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+    const [currentUserRole, setCurrentUserRole] = useState<string>("None"); // Rol del usuario actual en la org (Miembro/Manager)
 
     const [metrics, setMetrics] = useState<Metrics | null>(null);
     const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -57,8 +59,13 @@ export default function EquiposPage() {
 
     const [selectedOrgId, setSelectedOrgId] = useState<number | "">("");
     const [targetOrgForOrphan, setTargetOrgForOrphan] = useState<{ [userId: number]: string }>({});
+    
+    // Estado para mover usuario
     const [editingMemberId, setEditingMemberId] = useState<number | null>(null);
     const [targetOrgForMove, setTargetOrgForMove] = useState<string>("");
+
+    // Estado para cambiar rol
+    const [updatingRole, setUpdatingRole] = useState<{ [userId: number]: boolean }>({});
 
     const [newOrgName, setNewOrgName] = useState("");
     const [newOrgPlan, setNewOrgPlan] = useState("FREE");
@@ -66,7 +73,7 @@ export default function EquiposPage() {
     const [memberSearch, setMemberSearch] = useState("");
     const [orphanSearch, setOrphanSearch] = useState("");
 
-    // 🔽 ESTADO DE ORDENAMIENTO
+    // Ordenamiento
     const [sortConfig, setSortConfig] = useState<SortConfig>({ key: "totalPosts", direction: "desc" });
 
     useEffect(() => {
@@ -84,6 +91,8 @@ export default function EquiposPage() {
 
             if (json.ok) {
                 setIsSuperAdmin(json.data.isSuperAdmin);
+                setCurrentUserRole(json.data.currentUserRole || "None");
+                
                 if (json.data.organizations) setOrganizations(json.data.organizations);
                 setMetrics(json.data.metrics || null);
                 setMembers(json.data.members || []);
@@ -98,7 +107,6 @@ export default function EquiposPage() {
         }
     }
 
-    // 🔄 Handler de Ordenamiento
     const handleSort = (key: SortConfig["key"]) => {
         setSortConfig((current) => ({
             key,
@@ -106,26 +114,21 @@ export default function EquiposPage() {
         }));
     };
 
-    // 🔎 Filtro + Ordenamiento (Memoizado)
     const processedMembers = useMemo(() => {
-        // 1. Filtrar
         let filtered = members.filter(m =>
             m.name?.toLowerCase().includes(memberSearch.toLowerCase()) ||
             m.email?.toLowerCase().includes(memberSearch.toLowerCase())
         );
 
-        // 2. Ordenar
         return filtered.sort((a, b) => {
             let valA: any = a[sortConfig.key as keyof Member];
             let valB: any = b[sortConfig.key as keyof Member];
 
-            // Caso especial: Eficiencia (Calculada)
             if (sortConfig.key === "efficiency") {
                 valA = a.totalPosts > 0 ? a.totalLikes / a.totalPosts : 0;
                 valB = b.totalPosts > 0 ? b.totalLikes / b.totalPosts : 0;
             }
 
-            // Comparación genérica
             if (valA < valB) return sortConfig.direction === "asc" ? -1 : 1;
             if (valA > valB) return sortConfig.direction === "asc" ? 1 : -1;
             return 0;
@@ -137,11 +140,9 @@ export default function EquiposPage() {
         u.email?.toLowerCase().includes(orphanSearch.toLowerCase())
     );
 
-    // Funciones de Gestión (Iguales)
     async function handleCreateOrg(e: React.FormEvent) {
         e.preventDefault();
         if (!newOrgName) return;
-        
         setIsCreatingOrg(true);
         try {
             const res = await fetch("/api/organizations", {
@@ -149,37 +150,16 @@ export default function EquiposPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: newOrgName, plan: newOrgPlan }),
             });
-
-            const json = await res.json();
-
-            if (json.ok) {
-                toast.success("Organización creada ✅");
-                setNewOrgName("");
-                fetchData();
-            } else {
-                toast.error("Error al crear: " + (json.error || "Desconocido"));
-            }
-        } catch (error) {
-            console.error(error);
-            toast.error("Error de conexión");
-        } finally {
-            setIsCreatingOrg(false);
-        }
+            if ((await res.json()).ok) { toast.success("Organización creada ✅"); setNewOrgName(""); fetchData(); }
+        } catch { toast.error("Error de conexión"); } 
+        finally { setIsCreatingOrg(false); }
     }
 
     async function handleDeleteOrg(id: number) {
-        if (!confirm("¿Seguro que deseas eliminar esta organización? Esto podría romper usuarios asociados.")) return;
-
+        if (!confirm("¿Seguro? Esto podría romper usuarios asociados.")) return;
         const res = await fetch(`/api/organizations?id=${id}`, { method: "DELETE" });
-        const json = await res.json();
-
-        if (json.ok) {
-            toast.success("Organización eliminada 🗑️");
-            if (selectedOrgId === id) setSelectedOrgId(""); // Resetear selección si borramos la actual
-            fetchData();
-        } else {
-            toast.error("No se pudo eliminar (verifica dependencias)");
-        }
+        if ((await res.json()).ok) { toast.success("Eliminada 🗑️"); if (selectedOrgId === id) setSelectedOrgId(""); fetchData(); }
+        else { toast.error("No se pudo eliminar"); }
     }
 
     async function handleMoveUser(userId: number) {
@@ -189,11 +169,10 @@ export default function EquiposPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ userId, newOrgId: targetOrgForMove })
         });
-        if ((await res.json()).ok) {
-            toast.success("Usuario movido ✈️");
-            setEditingMemberId(null); setTargetOrgForMove(""); fetchData();
-        } else { toast.error("Error al mover"); }
+        if ((await res.json()).ok) { toast.success("Usuario movido ✈️"); setEditingMemberId(null); setTargetOrgForMove(""); fetchData(); }
+        else { toast.error("Error al mover"); }
     }
+
     async function handleAssignOrphan(userId: number) {
         const orgId = targetOrgForOrphan[userId]; if (!orgId) return;
         const res = await fetch("/api/organizations", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, newOrgId: orgId }) });
@@ -201,9 +180,27 @@ export default function EquiposPage() {
         else { toast.error("Error al asignar"); }
     }
 
-    const currentOrgName = organizations.find(o => o.id === metrics?.organizationId)?.name || "Mi Organización";
+    // 🆕 Función para cambiar el rol de membresía
+    async function handleChangeRole(userId: number, newRole: string) {
+        if (!metrics?.organizationId) return;
+        setUpdatingRole(prev => ({ ...prev, [userId]: true }));
+        try {
+            const res = await fetch("/api/organizations", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId, organizationId: metrics.organizationId, newRole })
+            });
+            if ((await res.json()).ok) {
+                toast.success(`Rol actualizado a ${newRole}`);
+                setMembers(prev => prev.map(m => m.id === userId ? { ...m, membershipRole: newRole } : m));
+            } else {
+                toast.error("No se pudo actualizar el rol");
+            }
+        } catch { toast.error("Error de conexión"); }
+        finally { setUpdatingRole(prev => ({ ...prev, [userId]: false })); }
+    }
 
-    // Helper para flechitas
+    const currentOrgName = organizations.find(o => o.id === metrics?.organizationId)?.name || "Mi Organización";
     const SortIcon = ({ colKey }: { colKey: SortConfig["key"] }) => {
         if (sortConfig.key !== colKey) return <span className="text-slate-200/20 ml-1">↕</span>;
         return <span className="text-slate-200 ml-1">{sortConfig.direction === "asc" ? "↑" : "↓"}</span>;
@@ -212,7 +209,6 @@ export default function EquiposPage() {
     return (
         <div className="max-w-6xl mx-auto space-y-10">
 
-            {/* 👑 SUPER ADMIN: SELECTOR GLOBAL (Movid a la parte superior) */}
             {isSuperAdmin && (
                 <div className="bg-white/5 border border-white/10 p-4 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-top-4">
                     <span className="text-indigo-300 font-bold text-sm uppercase tracking-wider">🛡️ Panel de Administrador</span>
@@ -232,7 +228,6 @@ export default function EquiposPage() {
                 </div>
             )}
 
-            {/* 🏢 SECCIÓN 1: MI ORGANIZACIÓN (Vista Operativa) */}
             <section className="space-y-6">
                 <div className="flex flex-col md:flex-row justify-between items-end border-b border-white/20 pb-4 gap-4">
                     <div>
@@ -246,7 +241,6 @@ export default function EquiposPage() {
                 
                 {loading ? <div className="text-center py-10 animate-pulse">Cargando...</div> : metrics ? (
                     <>
-                        {/* Cards Totales */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className="backdrop-blur-md bg-white/5 border border-white/10 p-6 rounded-xl">
                                 <p className="text-sm text-gray-300 font-bold">Total Likes</p>
@@ -262,7 +256,6 @@ export default function EquiposPage() {
                             </div>
                         </div>
 
-                        {/* Tabla de Miembros */}
                         <div className="backdrop-blur-xl bg-white/10 border border-white/20 p-6 rounded-2xl shadow-lg">
                             <div className="flex justify-between items-center mb-6">
                                 <h2 className="text-2xl font-bold">👥 Miembros del Equipo</h2>
@@ -278,11 +271,11 @@ export default function EquiposPage() {
                                     <thead>
                                         <tr className="text-slate-200/60 border-b border-white/10 text-sm uppercase cursor-pointer select-none">
                                             <th className="p-4 hover:text-slate-200" onClick={() => handleSort("name")}>Usuario <SortIcon colKey="name" /></th>
-                                            <th className="p-4 hover:text-slate-200" onClick={() => handleSort("roleName")}>Rol <SortIcon colKey="roleName" /></th>
+                                            <th className="p-4 hover:text-slate-200" onClick={() => handleSort("membershipRole")}>Rol <SortIcon colKey="membershipRole" /></th>
                                             <th className="p-4 text-center hover:text-slate-200" onClick={() => handleSort("totalPosts")}>Posts <SortIcon colKey="totalPosts" /></th>
                                             <th className="p-4 text-center hover:text-slate-200" onClick={() => handleSort("totalLikes")}>Likes <SortIcon colKey="totalLikes" /></th>
                                             <th className="p-4 text-center hover:text-slate-200" onClick={() => handleSort("efficiency")}>Eficiencia <SortIcon colKey="efficiency" /></th>
-                                            {isSuperAdmin && <th className="p-4 text-right">Acciones</th>}
+                                            <th className="p-4 text-right">Acciones</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-white/10">
@@ -299,27 +292,40 @@ export default function EquiposPage() {
                                                     </div>
                                                 </td>
                                                 <td className="p-4">
-                                                    <span className="text-xs bg-indigo-500/30 border border-indigo-500/50 px-2 py-1 rounded text-slate-200 font-medium">
-                                                        {member.roleName}
-                                                    </span>
+                                                    {/* SELECTOR DE ROL: Solo para Super Admins */}
+                                                    {isSuperAdmin ? (
+                                                        <select 
+                                                            value={member.membershipRole}
+                                                            onChange={(e) => handleChangeRole(member.id, e.target.value)}
+                                                            disabled={updatingRole[member.id]}
+                                                            className={`text-xs border px-2 py-1 rounded font-medium bg-black/30 outline-none cursor-pointer transition ${
+                                                                member.membershipRole === "Manager" ? "border-purple-500/50 text-purple-200" : "border-white/20 text-slate-200"
+                                                            }`}
+                                                        >
+                                                            <option value="Miembro">Miembro</option>
+                                                            <option value="Manager">Manager</option>
+                                                        </select>
+                                                    ) : (
+                                                        <span className={`text-xs border px-2 py-1 rounded font-medium ${
+                                                            member.membershipRole === "Manager" ? "bg-purple-500/30 border-purple-500/50 text-purple-200" : "bg-white/10 border-white/10 text-slate-200"
+                                                        }`}>
+                                                            {member.membershipRole}
+                                                        </span>
+                                                    )}
                                                 </td>
                                                 <td className="p-4 text-center font-mono">{member.totalPosts}</td>
                                                 <td className="p-4 text-center font-mono text-pink-300">{member.totalLikes}</td>
                                                 <td className="p-4 text-center">
-                                                    {/* Cálculo de Ratio: Likes / Posts */}
-                                                    <span className={`text-sm font-bold px-2 py-1 rounded ${(member.totalPosts > 0 ? member.totalLikes / member.totalPosts : 0) > 10
-                                                        ? "bg-green-500/20 text-green-300"
-                                                        : "bg-white/5 text-slate-200/60"
-                                                        }`}>
+                                                    <span className={`text-sm font-bold px-2 py-1 rounded ${(member.totalPosts > 0 ? member.totalLikes / member.totalPosts : 0) > 10 ? "bg-green-500/20 text-green-300" : "bg-white/5 text-slate-200/60"}`}>
                                                         {member.totalPosts > 0 ? (member.totalLikes / member.totalPosts).toFixed(1) : "0.0"}
                                                     </span>
                                                 </td>
 
-                                                {isSuperAdmin && (
-                                                    <td className="p-4 text-right">
-                                                        <div className="flex items-center justify-end gap-2">
-
-                                                            {/* Botón Ver Métricas Personales */}
+                                                <td className="p-4 text-right">
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        
+                                                        {/* 👁️ Botón Métricas: Visible para SuperAdmin O Manager de la org */}
+                                                        {(isSuperAdmin || currentUserRole === "Manager") && (
                                                             <a
                                                                 href={`/equipos/metricas/${member.id}`}
                                                                 className="text-xs bg-blue-500/20 hover:bg-blue-500/40 text-blue-200 px-3 py-1.5 rounded transition border border-blue-500/30 flex items-center gap-1"
@@ -327,33 +333,31 @@ export default function EquiposPage() {
                                                             >
                                                                 📊 <span className="hidden lg:inline">Métricas</span>
                                                             </a>
+                                                        )}
 
-                                                            {/* Lógica Mover Usuario */}
-                                                            {member.roleId <= 3 ? (
-                                                                editingMemberId === member.id ? (
-                                                                    <div className="flex items-center justify-end gap-2">
-                                                                        <select
-                                                                            className="text-sm bg-black/20 border border-white/30 rounded px-2 py-1 text-slate-200"
-                                                                            value={targetOrgForMove}
-                                                                            onChange={(e) => setTargetOrgForMove(e.target.value)}
-                                                                        >
-                                                                            <option value="">Destino...</option>
-                                                                            {organizations.filter(o => o.id !== metrics.organizationId).map(o => (
-                                                                                <option key={o.id} value={o.id}>{o.name}</option>
-                                                                            ))}
-                                                                        </select>
-                                                                        <button onClick={() => handleMoveUser(member.id)} disabled={!targetOrgForMove} className="bg-green-500 p-1 rounded">💾</button>
-                                                                        <button onClick={() => setEditingMemberId(null)} className="bg-red-500/50 p-1 rounded">✕</button>
-                                                                    </div>
-                                                                ) : (
-                                                                    <button onClick={() => setEditingMemberId(member.id)} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded">🔁 Mover</button>
-                                                                )
+                                                        {/* Mover Usuario: Solo SuperAdmin */}
+                                                        {isSuperAdmin && (
+                                                            editingMemberId === member.id ? (
+                                                                <div className="flex items-center justify-end gap-2">
+                                                                    <select
+                                                                        className="text-sm bg-black/20 border border-white/30 rounded px-2 py-1 text-slate-200"
+                                                                        value={targetOrgForMove}
+                                                                        onChange={(e) => setTargetOrgForMove(e.target.value)}
+                                                                    >
+                                                                        <option value="">Destino...</option>
+                                                                        {organizations.filter(o => o.id !== metrics.organizationId).map(o => (
+                                                                            <option key={o.id} value={o.id}>{o.name}</option>
+                                                                        ))}
+                                                                    </select>
+                                                                    <button onClick={() => handleMoveUser(member.id)} disabled={!targetOrgForMove} className="bg-green-500 p-1 rounded">💾</button>
+                                                                    <button onClick={() => setEditingMemberId(null)} className="bg-red-500/50 p-1 rounded">✕</button>
+                                                                </div>
                                                             ) : (
-                                                                <span className="text-xs text-slate-200/20 italic">Admin</span>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                )}
+                                                                <button onClick={() => setEditingMemberId(member.id)} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded">🔁 Mover</button>
+                                                            )
+                                                        )}
+                                                    </div>
+                                                </td>
                                             </tr>
                                         )) : (
                                             <tr><td colSpan={6} className="p-4 text-center text-slate-200/50">No se encontraron miembros.</td></tr>
@@ -368,7 +372,6 @@ export default function EquiposPage() {
                 )}
             </section>
 
-            {/* ⚙️ SECCIÓN 2: GESTIÓN DE ORGANIZACIONES (SOLO ADMIN) */}
             {isSuperAdmin && (
                 <section className="space-y-6 border-t-2 border-white/10 pt-10">
                     <div className="flex flex-col md:flex-row justify-between items-end">
@@ -379,7 +382,6 @@ export default function EquiposPage() {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        {/* Lista de Organizaciones */}
                         <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-6 rounded-2xl">
                             <h3 className="text-xl font-bold mb-4">Organizaciones Activas</h3>
                             <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
@@ -392,7 +394,6 @@ export default function EquiposPage() {
                             </div>
                         </div>
 
-                        {/* Crear Organización */}
                         <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-6 rounded-2xl">
                             <h3 className="text-xl font-bold mb-4">Crear Nueva</h3>
                             <form onSubmit={handleCreateOrg} className="space-y-3">
@@ -402,33 +403,20 @@ export default function EquiposPage() {
                                     <option value="PRO">Plan PRO</option>
                                     <option value="ENTERPRISE">Plan ENTERPRISE</option>
                                 </select>
-                                <button
-                                    disabled={isCreatingOrg}
-                                    className={`w-full font-bold py-2 rounded transition flex justify-center items-center gap-2 ${isCreatingOrg ? "bg-green-600/50 cursor-not-allowed text-slate-200/70" : "bg-green-600 hover:bg-green-500 text-slate-200"
-                                        }`}
-                                >
+                                <button disabled={isCreatingOrg} className={`w-full font-bold py-2 rounded transition flex justify-center items-center gap-2 ${isCreatingOrg ? "bg-green-600/50 cursor-not-allowed text-slate-200/70" : "bg-green-600 hover:bg-green-500 text-slate-200"}`}>
                                     {isCreatingOrg ? <><span className="animate-spin text-lg">↻</span> Creando...</> : "+ Crear"}
                                 </button>
                             </form>
                         </div>
                     </div>
 
-                    {/* ⚠️ Usuarios Huérfanos con Buscador */}
                     <div className="backdrop-blur-xl bg-orange-500/10 border border-orange-500/30 p-6 rounded-2xl shadow-lg">
                         <div className="flex justify-between items-center mb-4">
                             <h2 className="text-2xl font-bold flex items-center gap-2 text-orange-200">
                                 ⚠️ Usuarios sin Organización
                                 <span className="text-sm bg-orange-500/20 px-2 py-1 rounded-full text-slate-200">{orphanedUsers.length}</span>
                             </h2>
-
-                            {/* Buscador Huérfanos */}
-                            <input
-                                type="text"
-                                placeholder="Buscar huérfano..."
-                                className="bg-black/20 border border-orange-500/30 rounded-full px-4 py-1 text-sm text-slate-200 focus:outline-none w-48"
-                                value={orphanSearch}
-                                onChange={(e) => setOrphanSearch(e.target.value)}
-                            />
+                            <input type="text" placeholder="Buscar huérfano..." className="bg-black/20 border border-orange-500/30 rounded-full px-4 py-1 text-sm text-slate-200 focus:outline-none w-48" value={orphanSearch} onChange={(e) => setOrphanSearch(e.target.value)} />
                         </div>
 
                         <div className="overflow-x-auto">
@@ -450,11 +438,7 @@ export default function EquiposPage() {
                                             <td className="p-3"><span className="text-xs border border-orange-500/30 px-2 py-1 rounded text-orange-200">{user.roleId}</span></td>
                                             <td className="p-3 text-right">
                                                 <div className="flex items-center justify-end gap-2">
-                                                    <select
-                                                        className="text-sm bg-black/20 border border-orange-500/30 rounded px-2 py-1 text-slate-200"
-                                                        value={targetOrgForOrphan[user.id] || ""}
-                                                        onChange={(e) => setTargetOrgForOrphan({ ...targetOrgForOrphan, [user.id]: e.target.value })}
-                                                    >
+                                                    <select className="text-sm bg-black/20 border border-orange-500/30 rounded px-2 py-1 text-slate-200" value={targetOrgForOrphan[user.id] || ""} onChange={(e) => setTargetOrgForOrphan({ ...targetOrgForOrphan, [user.id]: e.target.value })}>
                                                         <option value="">Seleccionar Org...</option>
                                                         {organizations.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}
                                                     </select>

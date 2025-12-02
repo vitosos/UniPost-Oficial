@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 
-// 1. Actualizamos el Tipo para incluir 'category'
+// 1. Tipo actualizado (igual que antes)
 export type FeedVariant = {
   id: number;
   network: "BLUESKY" | "INSTAGRAM" | "FACEBOOK" | "TIKTOK" | string;
@@ -11,7 +11,7 @@ export type FeedVariant = {
   post?: {
     title?: string | null;
     body?: string | null;
-    category?: string | null; // 👈 Necesario para el filtro
+    category?: string | null;
   };
 };
 
@@ -22,13 +22,11 @@ const NETWORKS = [
   { label: "Bluesky", value: "BLUESKY" },
   { label: "Instagram", value: "INSTAGRAM" },
   { label: "Facebook", value: "FACEBOOK" },
-  // { label: "TikTok", value: "TIKTOK" }, // Descomentar cuando se implemente
+  { label: "TikTok", value: "TIKTOK" },
 ];
-const ITEMS_PER_PAGE = 10;
+const ITEMS_PER_PAGE = 9;
 
-// --- HELPER FUNCTIONS (URI / EMBEDS) ---
-// (Se mantienen igual que en tu versión original)
-
+// --- HELPER FUNCTIONS ---
 function blueskyAtUriToUrl(atUri: string): string | null {
   try {
     const withoutPrefix = atUri.replace("at://", "");
@@ -80,7 +78,9 @@ function FeedCard({ variant }: { variant: FeedVariant }) {
         <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full 
           ${variant.network === 'BLUESKY' ? 'bg-sky-900/50 text-sky-200' : 
             variant.network === 'INSTAGRAM' ? 'bg-pink-900/50 text-pink-200' : 
-            variant.network === 'FACEBOOK' ? 'bg-blue-900/50 text-blue-200' : 'bg-gray-700 text-gray-300'}`}>
+            variant.network === 'FACEBOOK' ? 'bg-blue-900/50 text-blue-200' : 
+            variant.network === 'TIKTOK' ? 'bg-cyan-900/50 text-cyan-200' : 
+            'bg-gray-700 text-gray-300'}`}>
           {variant.network}
         </span>
         {variant.post?.category && (
@@ -100,12 +100,10 @@ export function PublicFeed() {
   const [items, setItems] = useState<FeedVariant[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Estados de Filtros y Paginación
   const [selectedCategory, setSelectedCategory] = useState("Todas");
   const [selectedNetwork, setSelectedNetwork] = useState("ALL");
   const [currentPage, setCurrentPage] = useState(1);
 
-  // 1. Fetch Data
   useEffect(() => {
     (async () => {
       try {
@@ -120,7 +118,6 @@ export function PublicFeed() {
     })();
   }, []);
 
-  // 2. Lógica de Filtrado (Memoizada para rendimiento)
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
       const matchCat = selectedCategory === "Todas" || item.post?.category === selectedCategory;
@@ -129,29 +126,24 @@ export function PublicFeed() {
     });
   }, [items, selectedCategory, selectedNetwork]);
 
-  // 3. Lógica de Paginación
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
   const displayedItems = filteredItems.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
 
-  // Resetear página al cambiar filtros
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedCategory, selectedNetwork]);
 
-  // 4. Scripts de Embeds (Bluesky & Instagram)
   useEffect(() => {
     if (displayedItems.length === 0) return;
 
-    // Bluesky Script
     const bskyScript = document.createElement("script");
     bskyScript.src = "https://embed.bsky.app/static/embed.js";
     bskyScript.async = true;
     document.body.appendChild(bskyScript);
 
-    // Instagram Script
     if (displayedItems.some((i) => i.network === "INSTAGRAM")) {
       if ((window as any).instgrm) {
         (window as any).instgrm.Embeds.process();
@@ -167,7 +159,7 @@ export function PublicFeed() {
     return () => {
       if(document.body.contains(bskyScript)) document.body.removeChild(bskyScript);
     };
-  }, [displayedItems]); // Ejecutar cuando cambien los items mostrados (paginación)
+  }, [displayedItems]);
 
   return (
     <section className="mx-auto max-w-7xl px-4 md:px-6 pb-20" id="feed">
@@ -181,7 +173,7 @@ export function PublicFeed() {
       {/* --- CONTROLES DE FILTRO --- */}
       <div className="mb-10 flex flex-col gap-6 items-center">
         
-        {/* Selector de Red (Dropdown simple para móvil/desktop) */}
+        {/* Selector de Red */}
         <div className="w-full max-w-xs">
             <label className="block text-xs text-gray-400 mb-1 text-center">Filtrar por Red Social</label>
             <select 
@@ -195,9 +187,13 @@ export function PublicFeed() {
             </select>
         </div>
 
-        {/* Botones de Categoría (Scroll horizontal en móvil) */}
-        <div className="w-full overflow-x-auto pb-2 flex justify-center">
-            <div className="flex gap-2">
+        {/* 🛠️ CORRECCIÓN AQUÍ 🛠️ 
+            1. Quitamos 'flex justify-center' del contenedor padre (esto rompía el scroll móvil).
+            2. Añadimos 'px-4' al hijo y 'min-w-max' para que los botones no se aplasten.
+            3. Usamos 'md:justify-center' para que en Desktop sí se centren.
+        */}
+        <div className="w-full overflow-x-auto pb-2">
+            <div className="flex gap-2 px-4 min-w-max md:justify-center md:w-full md:min-w-0">
                 {CATEGORIES.map((cat) => (
                 <button
                     key={cat}

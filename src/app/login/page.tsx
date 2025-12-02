@@ -82,14 +82,25 @@ export default function LoginPage() {
             required
             />
 
-            <input
-            type="password"
-            placeholder="Contraseña"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 placeholder-gray-400 focus:outline-none focus:border-white/40 focus:bg-black/30 transition"
-            required
-            />
+            <div>
+                <input
+                type="password"
+                placeholder="Contraseña"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full p-3 rounded-xl bg-black/20 border border-white/10 placeholder-gray-400 focus:outline-none focus:border-white/40 focus:bg-black/30 transition"
+                required
+                />
+                
+                <div className="flex justify-end mt-2">
+                    <Link 
+                        href="/forgot-password" 
+                        className="text-xs text-slate-400 hover:text-indigo-300 transition hover:underline"
+                    >
+                        ¿Has olvidado tu contraseña?
+                    </Link>
+                </div>
+            </div>
         </div>
 
         <button

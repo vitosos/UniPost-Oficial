@@ -229,3 +229,43 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ ok: false, error: "DELETE_FAILED" }, { status: 500 });
   }
 }
+
+export async function PUT(req: Request) {
+  try {
+    const session = await getServerSession();
+    if (!session || !session.user?.email) {
+      return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
+    }
+
+    const body = await req.json();
+    const { variantId, text } = body;
+
+    if (!variantId || text === undefined) {
+      return NextResponse.json({ ok: false, error: "Missing data" }, { status: 400 });
+    }
+
+    // Verificar que el usuario sea dueño del post (seguridad)
+    const variant = await prisma.variant.findUnique({
+      where: { id: variantId },
+      include: { post: true }
+    });
+
+    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+
+    if (!variant || !user || variant.post.authorId !== user.id) {
+      return NextResponse.json({ ok: false, error: "Unauthorized or not found" }, { status: 403 });
+    }
+
+    // Actualizar texto
+    const updated = await prisma.variant.update({
+      where: { id: variantId },
+      data: { text },
+    });
+
+    return NextResponse.json({ ok: true, data: updated });
+
+  } catch (err: any) {
+    console.error("❌ Error PUT /api/posts:", err);
+    return NextResponse.json({ ok: false, error: "UPDATE_FAILED" }, { status: 500 });
+  }
+}
