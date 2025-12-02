@@ -13,6 +13,7 @@ import BskyIcon from "@/app/assets/bsky.png";
 import IgIcon from "@/app/assets/ig.png";
 import FbIcon from "@/app/assets/fb.png";
 import TtIcon from "@/app/assets/tt.png";
+import XIcon from "@/app/assets/x.png"; // 👈 Importamos ícono X
 
 // --- TIPOS ---
 export type Metric = {
@@ -31,8 +32,10 @@ type BskyProfile = { avatar: string | null; displayName: string | null; handle: 
 type InstagramProfile = { username: string; name: string | null; profilePictureUrl: string | null; followers: number | null; follows: number | null; mediaCount: number | null; posts: number; };
 type FacebookProfile = { name: string; picture: { data: { url: string } }; followers_count: number; fan_count: number; };
 type TikTokProfile = { username: string; display_name: string; avatar_url: string; follower_count: number; likes_count: number; };
+// 👇 Nuevo Tipo X
+type XProfile = { username: string; name: string | null; avatar: string | null; followers: number; tweets: number; };
 
-type TabKey = "GENERAL" | "BLUESKY" | "INSTAGRAM" | "FACEBOOK" | "TIKTOK";
+type TabKey = "GENERAL" | "BLUESKY" | "INSTAGRAM" | "FACEBOOK" | "TIKTOK" | "TWITTER"; // 👈 Agregamos TWITTER
 
 type SortConfig = {
   key: keyof Metric | "dateSent";
@@ -42,7 +45,7 @@ type SortConfig = {
 const ITEMS_PER_PAGE = 10;
 
 interface Props {
-  targetUserId?: number; // ID del usuario que estamos viendo (si es admin viendo a otro)
+  targetUserId?: number;
   userName?: string;
 }
 
@@ -56,6 +59,7 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
   const [igProfile, setIgProfile] = useState<InstagramProfile | null>(null);
   const [fbProfile, setFbProfile] = useState<FacebookProfile | null>(null);
   const [ttProfile, setTtProfile] = useState<TikTokProfile | null>(null);
+  const [xProfile, setXProfile] = useState<XProfile | null>(null); // 👈 Estado X
 
   // UI
   const [activeTab, setActiveTab] = useState<TabKey>("GENERAL");
@@ -76,6 +80,8 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
     fetch(getApiUrl("/api/instagram/profile")).then((r) => r.json()).then((d) => { if (d.ok && d.profile) setIgProfile({ ...d.profile, posts: d.profile.mediaCount || d.profile.posts || 0 }); }).catch(console.error);
     fetch(getApiUrl("/api/facebook/profile")).then((r) => r.json()).then((d) => d.ok && setFbProfile(d.profile)).catch(console.error);
     fetch(getApiUrl("/api/tiktok/profile")).then((r) => r.json()).then((d) => d.ok && setTtProfile(d.profile)).catch(console.error);
+    // 👇 Carga perfil X
+    fetch(getApiUrl("/api/x_twitter/profile")).then((r) => r.json()).then((d) => d.ok && setXProfile(d.profile)).catch(console.error);
   }, [targetUserId]);
 
   // --- 2. CARGA DE MÉTRICAS ---
@@ -188,7 +194,6 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
       setSyncing(true);
       setSyncMessage(null);
 
-      // Enviamos el targetUserId en el body si existe
       const payload = targetUserId ? { targetUserId } : {};
 
       const res = await fetch("/api/metrics/refresh", { 
@@ -259,7 +264,9 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
       </div>
 
       {/* --- 1. TARJETAS DE PERFIL --- */}
-      <div className="max-w-7xl mx-auto mb-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Cambiamos grid a 5 columnas en XL para que quepan todas, o auto-fit */}
+      <div className="max-w-[90rem] mx-auto mb-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+        
         {/* Bluesky */}
         <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
           <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
@@ -361,6 +368,33 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
             ) : <div className="w-full text-center py-4 opacity-50 text-sm">TikTok no conectado</div>}
           </div>
         </div>
+
+        {/* 🆕 X (TWITTER) */}
+        <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
+          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
+            <Image src={XIcon} alt="logo" width={100} height={100} />
+          </div>
+          <div className="relative flex items-center gap-4 z-10">
+            {xProfile ? (
+              <>
+                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-white/30 p-1 bg-black">
+                  <img src={xProfile.avatar || ""} className="w-full h-full rounded-full object-cover bg-black/20" alt="X" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] uppercase text-slate-300 font-bold tracking-wider mb-1">X (Twitter)</p>
+                  <p className="font-bold text-lg leading-tight truncate">{xProfile.name}</p>
+                  <p className="text-xs opacity-60 truncate mb-2">@{xProfile.username}</p>
+                  <div className="flex flex-wrap gap-2 text-[10px] font-mono bg-black/20 px-2 py-1 rounded-lg">
+                    <span>👥 {xProfile.followers}</span>
+                    <span>📝 {xProfile.tweets}</span>
+                    <span className="text-slate-200 font-bold">❤️ {getNetworkRatio("TWITTER")} avg</span>
+                  </div>
+                </div>
+              </>
+            ) : <div className="w-full text-center py-4 opacity-50 text-sm">X no conectado</div>}
+          </div>
+        </div>
+
       </div>
 
       {/* --- 2. ANALÍTICA DE HASHTAGS --- */}
@@ -401,7 +435,7 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
 
       {/* --- TABS --- */}
       <div className="max-w-6xl mx-auto mb-8 flex flex-wrap justify-center gap-4">
-        {(["GENERAL", "BLUESKY", "INSTAGRAM", "FACEBOOK", "TIKTOK"] as TabKey[]).map((tab) => (
+        {(["GENERAL", "BLUESKY", "INSTAGRAM", "FACEBOOK", "TIKTOK", "TWITTER"] as TabKey[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -411,7 +445,7 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
                   : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white"
               }`}
             >
-              {tab === "GENERAL" ? "General" : tab.charAt(0) + tab.slice(1).toLowerCase()}
+              {tab === "GENERAL" ? "General" : tab === "TWITTER" ? "X (Twitter)" : tab.charAt(0) + tab.slice(1).toLowerCase()}
             </button>
         ))}
       </div>
@@ -459,6 +493,7 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
                             m.network === "INSTAGRAM" ? "bg-pink-500/20 text-pink-300 border border-pink-500/30" :
                             m.network === "FACEBOOK" ? "bg-blue-600/20 text-blue-300 border border-blue-500/30" :
                             m.network === "TIKTOK" ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" :
+                            m.network === "TWITTER" ? "bg-black text-white border border-white/20" : // 👈 Estilo TWITTER
                             "bg-gray-700 text-gray-300"
                         }`}>
                             {m.network}

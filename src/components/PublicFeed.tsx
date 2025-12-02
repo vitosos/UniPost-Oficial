@@ -2,10 +2,9 @@
 
 import { useEffect, useState, useMemo } from "react";
 
-// 1. Tipo actualizado (igual que antes)
 export type FeedVariant = {
   id: number;
-  network: "BLUESKY" | "INSTAGRAM" | "FACEBOOK" | "TIKTOK" | string;
+  network: "BLUESKY" | "INSTAGRAM" | "FACEBOOK" | "TIKTOK" | "TWITTER" | string;
   uri: string;
   permalink?: string | null;
   post?: {
@@ -19,10 +18,11 @@ export type FeedVariant = {
 const CATEGORIES = ["Todas", "Ilustración", "Evento", "Emprendimiento", "Entretenimiento", "Otro"];
 const NETWORKS = [
   { label: "Todas las redes", value: "ALL" },
-  { label: "Bluesky", value: "BLUESKY" },
   { label: "Instagram", value: "INSTAGRAM" },
   { label: "Facebook", value: "FACEBOOK" },
+  { label: "Bluesky", value: "BLUESKY" },
   { label: "TikTok", value: "TIKTOK" },
+  { label: "X (Twitter)", value: "TWITTER" }, // 👈 Agregado
 ];
 const ITEMS_PER_PAGE = 9;
 
@@ -53,20 +53,37 @@ function InstagramEmbed({ permalink }: { permalink: string }) {
   );
 }
 
+// 👇 NUEVO: Embed de X (Twitter)
+// Usamos el Tweet ID (uri) para generar el blockquote estándar
 function XEmbed({ uri }: { uri: string }) {
-  return <iframe src={uri} className="h-[380px] w-full rounded-xl border border-white/20 bg-black/40" loading="lazy" />;
+  return (
+    <div className="flex justify-center w-full overflow-hidden rounded-xl bg-black/40 border border-white/10">
+      <blockquote className="twitter-tweet" data-theme="dark" data-dnt="true">
+        <a href={`https://twitter.com/i/status/${uri}`}></a>
+      </blockquote>
+    </div>
+  );
 }
 
 function FacebookEmbed({ uri }: { uri: string }) {
-  return <iframe src={uri} className="h-[380px] w-full rounded-xl border border-white/20 bg-black/40" loading="lazy" />;
+  // Facebook es complejo de incrustar dinámicamente sin SDK pesado, usamos iframe simple si la URI lo permite o link
+  // Si uri es solo ID, es difícil. Asumimos que aquí llega algo manejable o un fallback.
+  // Para este MVP, mantendremos el fallback de enlace si no es un embed directo.
+   return <a href={`https://facebook.com/${uri}`} target="_blank" rel="noreferrer" className="block rounded-xl bg-[#1877F2]/20 border border-[#1877F2]/50 p-4 text-center text-sm font-bold text-blue-200 hover:bg-[#1877F2]/30 transition">Ver publicación en Facebook ↗</a>;
 }
 
 function renderEmbed(v: FeedVariant) {
   switch (v.network) {
     case "BLUESKY": return <BlueskyEmbed uri={v.uri} />;
     case "INSTAGRAM": return <InstagramEmbed permalink={v.permalink ?? v.uri} />;
-    case "X": return <XEmbed uri={v.uri} />;
+    case "TWITTER": return <XEmbed uri={v.uri} />; // 👈 Caso Twitter
     case "FACEBOOK": return <FacebookEmbed uri={v.uri} />;
+    
+    // TikTok requiere su propio script y estructura, similar a IG. 
+    // Por simplicidad usamos el player v2 si tenemos el video ID, o link.
+    case "TIKTOK": 
+      return <a href={`https://www.tiktok.com/embed/${v.uri}`} target="_blank" rel="noreferrer" className="block rounded-xl bg-black border border-cyan-500/50 p-4 text-center text-sm font-bold text-cyan-200 hover:bg-white/5 transition">Ver en TikTok 🎵</a>;
+    
     default: return <a href={v.uri} target="_blank" rel="noreferrer" className="block rounded-xl bg-black/30 p-3 text-center text-xs underline">Ver publicación</a>;
   }
 }
@@ -80,8 +97,9 @@ function FeedCard({ variant }: { variant: FeedVariant }) {
             variant.network === 'INSTAGRAM' ? 'bg-pink-900/50 text-pink-200' : 
             variant.network === 'FACEBOOK' ? 'bg-blue-900/50 text-blue-200' : 
             variant.network === 'TIKTOK' ? 'bg-cyan-900/50 text-cyan-200' : 
+            variant.network === 'TWITTER' ? 'bg-black border border-white/20 text-slate-200' : // 👈 Estilo X
             'bg-gray-700 text-gray-300'}`}>
-          {variant.network}
+          {variant.network === 'TWITTER' ? 'X (Twitter)' : variant.network}
         </span>
         {variant.post?.category && (
            <span className="text-[10px] text-slate-200/50 uppercase tracking-wider border border-white/10 px-2 py-0.5 rounded">
@@ -136,14 +154,17 @@ export function PublicFeed() {
     setCurrentPage(1);
   }, [selectedCategory, selectedNetwork]);
 
+  // --- EFECTO PARA CARGAR SCRIPTS DE EMBEDS ---
   useEffect(() => {
     if (displayedItems.length === 0) return;
 
+    // 1. Bluesky Script
     const bskyScript = document.createElement("script");
     bskyScript.src = "https://embed.bsky.app/static/embed.js";
     bskyScript.async = true;
     document.body.appendChild(bskyScript);
 
+    // 2. Instagram Script
     if (displayedItems.some((i) => i.network === "INSTAGRAM")) {
       if ((window as any).instgrm) {
         (window as any).instgrm.Embeds.process();
@@ -156,8 +177,21 @@ export function PublicFeed() {
       }
     }
 
+    // 3. X (Twitter) Script 🆕
+    if (displayedItems.some((i) => i.network === "TWITTER")) {
+        if ((window as any).twttr) {
+            (window as any).twttr.widgets.load();
+        } else {
+            const twttrScript = document.createElement("script");
+            twttrScript.src = "https://platform.twitter.com/widgets.js";
+            twttrScript.async = true;
+            document.body.appendChild(twttrScript);
+        }
+    }
+
     return () => {
       if(document.body.contains(bskyScript)) document.body.removeChild(bskyScript);
+      // Nota: No solemos remover los de IG/Twitter porque se reutilizan en la ventana global
     };
   }, [displayedItems]);
 
@@ -187,11 +221,6 @@ export function PublicFeed() {
             </select>
         </div>
 
-        {/* 🛠️ CORRECCIÓN AQUÍ 🛠️ 
-            1. Quitamos 'flex justify-center' del contenedor padre (esto rompía el scroll móvil).
-            2. Añadimos 'px-4' al hijo y 'min-w-max' para que los botones no se aplasten.
-            3. Usamos 'md:justify-center' para que en Desktop sí se centren.
-        */}
         <div className="w-full overflow-x-auto pb-2">
             <div className="flex gap-2 px-4 min-w-max md:justify-center md:w-full md:min-w-0">
                 {CATEGORIES.map((cat) => (

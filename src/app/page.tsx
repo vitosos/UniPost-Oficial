@@ -12,6 +12,7 @@ import BskyIcon from "./assets/bsky.png";
 import IgIcon from "./assets/ig.png";
 import TtIcon from "./assets/tt.png";
 import FbIcon from "./assets/fb.png";
+import XIcon from "./assets/x.png";
 
 export default function HomePage() {
   // 1. Desestructuramos 'status' para controlar la carga inicial
@@ -92,6 +93,7 @@ export default function HomePage() {
           <a href="#feed" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Feed</a>
           <a href="#features" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Características</a>
           <a href="#about" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Sobre Nosotros</a>
+          <a href="/term_cond" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Términos y Condiciones</a>
 
           <div className="flex items-center gap-3 ml-4">
             <AuthButtons />
@@ -144,7 +146,7 @@ export default function HomePage() {
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold ring-1 ring-white/20">
               <span>⚡️ Nuevo</span>
-              <span className="opacity-90">Publica en 3 redes con 1 click</span>
+              <span className="opacity-90">Publica en 4 redes con 1 click</span>
             </div>
             <h1 className="text-4xl font-black tracking-tight drop-shadow sm:text-6xl lg:text-7xl">
               Cuida tus tiempos. <span className="inline-block bg-white/90 px-3 text-slate-900 rounded-lg">Un solo panel</span>,
@@ -155,7 +157,7 @@ export default function HomePage() {
             </p>
 
             <p className="mt-5 max-w-xl text-base/7 opacity-95 sm:text-lg/8">
-              Actualmente con soporte completo para: <span className="inline-block bg-white/90 px-2 text-slate-900">Instagram Business, Facebook y Bluesky</span> disponible
+              Actualmente con soporte completo para: <span className="inline-block bg-white/90 px-2 text-slate-900">Instagram Business, Facebook, Bluesky y X (Twitter)</span> disponible
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -174,6 +176,13 @@ export default function HomePage() {
               {/* Instagram - Arriba Izquierda */}
               <div className="col-start-1 row-start-1 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 -rotate-[8deg] hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
                 <Image src={IgIcon} alt="Instagram" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg" />
+              </div>
+
+              {/* 🆕 X (Twitter) - Arriba Centro */}
+              <div className="col-start-2 row-start-1 flex justify-center items-end z-20 translate-y-4">
+                <div className="p-3 bg-black/40 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 rotate-[12deg] hover:rotate-0 transition-all duration-300 hover:scale-110">
+                  <Image src={XIcon} alt="X" width={80} height={80} className="w-16 h-16 lg:w-20 lg:h-20 drop-shadow-lg" />
+                </div>
               </div>
 
               {/* Facebook - Arriba Derecha */}

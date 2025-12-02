@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
-// import { authOptions } from ...
 
 type RemoteMetric = {
   id: string;       
@@ -13,7 +12,7 @@ type RemoteMetric = {
   createdAt?: string | Date;
 };
 
-// Helper: Limpia URLs
+// ... (Helpers normalizeUrl y getIGShortcode se mantienen igual) ...
 function normalizeUrl(url?: string | null) {
     if (!url) return "";
     try {
@@ -26,7 +25,6 @@ function normalizeUrl(url?: string | null) {
     }
 }
 
-// Helper: Extraer Shortcode
 function getIGShortcode(url?: string | null) {
     if (!url) return null;
     try {
@@ -40,7 +38,7 @@ export async function POST(req: NextRequest) {
     const session = await getServerSession();
     if (!session?.user?.email) return NextResponse.json({ ok: false }, { status: 401 });
 
-    // 1. Obtener usuario solicitante (Admin o Dueño)
+    // 1. Obtener usuario solicitante
     const requester = await prisma.user.findUnique({ 
         where: { email: session.user.email },
         select: { id: true, roleID: true, organizationId: true } 
@@ -48,57 +46,33 @@ export async function POST(req: NextRequest) {
 
     if (!requester) return NextResponse.json({ ok: false, error: "Usuario no encontrado" }, { status: 400 });
 
-    // 2. Determinar Target User y Validar Permisos
+    // 2. Determinar Target User y Validar Permisos (Lógica intacta)
     let targetUserId = requester.id;
-    
     try {
         const body = await req.json().catch(() => ({})); 
-        
         if (body.targetUserId) {
             const reqTargetId = Number(body.targetUserId);
             const globalRole = Number(requester.roleID || 0);
-
-            // Es Super Admin (Rol Global 4 o 5) -> Permiso Total
+            
             if (globalRole >= 4) {
                 targetUserId = reqTargetId;
-                console.log(`🛡️ Super Admin ${requester.id} refrescando a usuario ${targetUserId}`);
-            } 
-            // Se está refrescando a sí mismo -> Permiso Total
-            else if (reqTargetId === requester.id) {
+            } else if (reqTargetId === requester.id) {
                 targetUserId = reqTargetId;
-            }
-            // Es Manager de Organización -> Permiso Condicional
-            else {
-                // 1. Verificar que ambos estén en la MISMA organización
-                const targetUserCheck = await prisma.user.findUnique({
-                    where: { id: reqTargetId },
-                    select: { organizationId: true }
-                });
-
+            } else {
+                const targetUserCheck = await prisma.user.findUnique({ where: { id: reqTargetId }, select: { organizationId: true } });
                 if (!targetUserCheck || !requester.organizationId || targetUserCheck.organizationId !== requester.organizationId) {
                     return NextResponse.json({ ok: false, error: "No puedes gestionar usuarios de otra organización." }, { status: 403 });
                 }
-
-                // 2. Verificar que el solicitante sea 'Manager' en esa organización
-                const membership = await prisma.membership.findFirst({
-                    where: { 
-                        userId: requester.id, 
-                        organizationId: requester.organizationId 
-                    }
-                });
-
+                const membership = await prisma.membership.findFirst({ where: { userId: requester.id, organizationId: requester.organizationId } });
                 if (membership?.role !== "Manager") {
                     return NextResponse.json({ ok: false, error: "Se requiere rol de Manager para esta acción." }, { status: 403 });
                 }
-
-                // Si pasa las validaciones, permitimos el cambio
                 targetUserId = reqTargetId;
-                console.log(`👔 Manager ${requester.id} refrescando a miembro ${targetUserId}`);
             }
         }
     } catch (e) { /* ignore parse error */ }
 
-    // 3. Obtener Usuario OBJETIVO (para usar sus tokens)
+    // 3. Obtener Usuario OBJETIVO
     const userToRefresh = await prisma.user.findUnique({
         where: { id: targetUserId },
         select: { id: true, organizationId: true }
@@ -113,48 +87,54 @@ export async function POST(req: NextRequest) {
 
     const queryParams = `?userId=${userToRefresh.id}`;
 
-    const [bskyRes, igRes, fbRes] = await Promise.all([
+    const [bskyRes, igRes, fbRes, xRes] = await Promise.all([
         fetch(`${baseUrl}/api/bsky/metrics${queryParams}`, { headers: { cookie } }),
         fetch(`${baseUrl}/api/instagram/metrics${queryParams}`, { headers: { cookie } }),
         fetch(`${baseUrl}/api/facebook/metrics${queryParams}`, { headers: { cookie } }),
+        fetch(`${baseUrl}/api/x_twitter/metrics${queryParams}`, { headers: { cookie } }),
     ]);
 
     const bskyData = await bskyRes.json();
     const igData = await igRes.json();
     const fbData = await fbRes.json();
+    const xData = await xRes.json();
 
     // Construir Mapas
     const bskyMap = new Map<string, RemoteMetric>();
     const igMap = new Map<string, RemoteMetric>(); 
     const fbMap = new Map<string, RemoteMetric>();
+    const xMap = new Map<string, RemoteMetric>();
 
-    // Mapeo BLUESKY
-    if (bskyData.ok) {
-        bskyData.posts?.forEach((p: any) => {
-            bskyMap.set(p.uri, { id: p.uri, likes: p.likes, comments: p.comments, shares: p.shares, views: p.views, createdAt: p.createdAt });
-        });
-    }
+    if (bskyData.ok) bskyData.posts?.forEach((p: any) => bskyMap.set(p.uri, { id: p.uri, likes: p.likes, comments: p.comments, shares: p.shares, views: p.views, createdAt: p.createdAt }));
     
-    // Mapeo INSTAGRAM
-    if (igData.ok) {
-        igData.posts?.forEach((p: any) => {
-            const m: RemoteMetric = { id: p.id, permalink: p.permalink, likes: p.likes, comments: p.comments, shares: 0, views: 0, createdAt: p.createdAt };
-            igMap.set(p.id, m);
-            const shortcode = getIGShortcode(p.permalink);
-            if (shortcode) igMap.set(shortcode, m);
+    if (igData.ok) igData.posts?.forEach((p: any) => { 
+        const m = { id: p.id, permalink: p.permalink, likes: p.likes, comments: p.comments, shares: 0, views: 0, createdAt: p.createdAt }; 
+        igMap.set(p.id, m); 
+        const sc = getIGShortcode(p.permalink); 
+        if (sc) igMap.set(sc, m); 
+    });
+    
+    if (fbData.ok) fbData.posts?.forEach((p: any) => { 
+        const m = { id: p.id, likes: p.likes, comments: p.comments, shares: p.shares, views: 0, createdAt: p.createdAt }; 
+        fbMap.set(p.id, m); 
+        if (p.id.includes("_")) fbMap.set(p.id.split("_")[1], m); 
+    });
+
+    // 🆕 Mapeo X (Twitter)
+    if (xData.ok && xData.posts) {
+        xData.posts.forEach((p: any) => {
+             xMap.set(p.id, { 
+                id: p.id, 
+                likes: p.likes, 
+                comments: p.comments, 
+                shares: p.shares, 
+                views: p.views, 
+                createdAt: p.createdAt 
+            });
         });
     }
 
-    // Mapeo FACEBOOK
-    if (fbData.ok) {
-        fbData.posts?.forEach((p: any) => {
-            const m: RemoteMetric = { id: p.id, likes: p.likes, comments: p.comments, shares: p.shares, views: 0, createdAt: p.createdAt };
-            fbMap.set(p.id, m);
-            if (p.id.includes("_")) fbMap.set(p.id.split("_")[1], m);
-        });
-    }
-
-    // 4. Obtener Variantes DEL USUARIO OBJETIVO
+    // 4. Obtener Variantes y Actualizar
     const variants = await prisma.variant.findMany({
         where: {
             OR: [ { uri: { not: null } }, { permalink: { not: null } } ],
@@ -165,9 +145,9 @@ export async function POST(req: NextRequest) {
 
     let updated = 0;
 
-    // 5. Matching y Actualización
     for (const v of variants) {
         let remote: RemoteMetric | undefined;
+        
         if (v.network === "BLUESKY" && v.uri) remote = bskyMap.get(v.uri);
         else if (v.network === "INSTAGRAM") {
             if (v.uri) remote = igMap.get(v.uri);
@@ -177,9 +157,15 @@ export async function POST(req: NextRequest) {
             remote = fbMap.get(v.uri);
             if (!remote) { for (const [key, val] of fbMap.entries()) { if (key.includes(v.uri) || v.uri.includes(key)) { remote = val; break; } } }
         }
+        // 👇 NUEVO: Match Twitter
+        else if (v.network === "TWITTER" && v.uri) {
+            remote = xMap.get(v.uri);
+        }
 
         if (remote) {
             const payload = { likes: remote.likes, comments: remote.comments, shares: remote.shares, impressions: remote.views || 0, collectedAt: new Date() };
+            
+            // Solo actualizamos status y fecha si realmente vienen datos frescos
             const updateData: any = { status: "PUBLISHED" };
             if (remote.createdAt) updateData.date_sent = new Date(remote.createdAt);
 

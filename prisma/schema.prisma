@@ -30,6 +30,7 @@ model User {
   tikTokAccesses   TikTok_Access[]
   Organization     Organization?      @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   Role             Role?              @relation(fields: [roleID], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  X_Access         X_Access[]
 }
 
 model Organization {
@@ -114,6 +115,7 @@ model RedSocial {
   facebookAccesses Facebook_Access[]
   Instagram_Access Instagram_Access[]
   tikTokAccesses   TikTok_Access[]
+  X_Access         X_Access[]
 }
 
 model BlueSky_Access {
@@ -215,6 +217,25 @@ model TikTok_Access {
   User         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, redSocial])
+}
+
+model X_Access {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  redSocial    Int       @default(5)
+  accessToken  String
+  createdAt    DateTime  @default(now())
+  expiresIn    Int?
+  accessSecret String?
+  updatedAt    DateTime
+  usuarioRed   String    @default("'RETRIEVING'::text")
+  follows      Int?
+  metricaB     Int?
+  avatar       String?
+  twitterId    String
+  screenName   String    @default("RETRIEVING")
+  RedSocial    RedSocial @relation(fields: [redSocial], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  User         User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 enum MediaType {

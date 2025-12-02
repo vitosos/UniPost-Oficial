@@ -30,7 +30,8 @@ type UserConnections = {
   [key: string]: NetworkConnection;
 };
 
-const ALL_POSSIBLE_NETWORKS = ["INSTAGRAM", "BLUESKY", "FACEBOOK", "TIKTOK"] as const;
+// 1. 🆕 AGREGAMOS "TWITTER" A LA LISTA
+const ALL_POSSIBLE_NETWORKS = ["INSTAGRAM", "BLUESKY", "FACEBOOK", "TIKTOK", "TWITTER"] as const;
 const CATEGORIES = ["Ilustración", "Evento", "Emprendimiento", "Entretenimiento", "Otro"];
 
 // Zonas horarias IANA
@@ -57,7 +58,7 @@ export default function ComposerPage() {
   const [category, setCategory] = useState("Otro");
   const [visible, setVisible] = useState(false);
 
-  // Estados de Conexión (Nuevo)
+  // Estados de Conexión
   const [connections, setConnections] = useState<UserConnections>({});
   const [loadingConnections, setLoadingConnections] = useState(true);
   
@@ -81,12 +82,12 @@ export default function ComposerPage() {
             if (data.ok) {
                 setConnections(data.connections);
                 
-                // Inicializar variants con la primera red disponible por defecto (si hay alguna)
+                // Inicializar variants con la primera red disponible
                 const available = ALL_POSSIBLE_NETWORKS.filter(net => data.connections[net]?.connected);
                 if (available.length > 0) {
                     setVariants([{ network: available[0], text: "" }]);
                 } else {
-                    setVariants([]); // Sin redes, lista vacía
+                    setVariants([]); 
                 }
             }
         } catch (e) {
@@ -116,13 +117,13 @@ export default function ComposerPage() {
   const calculateRestrictions = () => {
     const networks = variants.map(v => v.network);
 
-    // Valores base (máximos posibles)
+    // Valores base
     let maxImages = 10;
     let maxVideos = 1;
     let allowMix = true;
     let minMedia = 0;
 
-    // Aplicamos restricciones según las redes activas
+    // Aplicamos restricciones
     if (networks.includes("TIKTOK")) {
       maxImages = 0; 
       minMedia = Math.max(minMedia, 1); 
@@ -131,6 +132,11 @@ export default function ComposerPage() {
     if (networks.includes("BLUESKY")) {
       maxImages = Math.min(maxImages, 4);
       allowMix = false;
+    }
+    // 2. 🆕 REGLAS PARA TWITTER (X)
+    if (networks.includes("TWITTER")) {
+        maxImages = Math.min(maxImages, 4); // X permite máx 4 fotos
+        allowMix = false; // X API v2 prefiere no mezclar simple
     }
     if (networks.includes("INSTAGRAM")) {
       minMedia = Math.max(minMedia, 1);
@@ -260,7 +266,6 @@ export default function ComposerPage() {
       setTitle(""); setBody(""); setMedias([]); setAgendar(false); setFecha("");
       setCategory("Otro"); setVisible(false);
       
-      // Resetear variants a la primera disponible
       const firstAvailable = ALL_POSSIBLE_NETWORKS.find(net => connections[net]?.connected);
       setVariants(firstAvailable ? [{ network: firstAvailable, text: "" }] : []);
     } else {
@@ -292,10 +297,9 @@ export default function ComposerPage() {
     setVariants(newVariants);
   };
 
-  // Solo mostramos las que tienen connected: true y no están ya en uso
   const availableNetworks = ALL_POSSIBLE_NETWORKS.filter(net => 
-    connections[net]?.connected === true && // Debe estar conectada
-    !variants.some(v => v.network === net)  // No debe estar seleccionada ya
+    connections[net]?.connected === true && 
+    !variants.some(v => v.network === net)  
   );
 
   const hasAnyConnection = Object.values(connections).some(c => c.connected);
@@ -304,8 +308,13 @@ export default function ComposerPage() {
       return <div className="min-h-screen flex items-center justify-center text-white">Cargando perfiles...</div>;
   }
 
+  // ... (El resto del return es idéntico al anterior, solo cambia la lista de redes arriba)
+  // No necesitamos cambiar nada más visualmente porque mapeamos ALL_POSSIBLE_NETWORKS dinámicamente.
+  
   return (
     <div className="max-w-6xl mx-auto">
+      {/* ... (Header y estado sin conexión igual) ... */}
+      
       {session && (
         <div className="flex justify-between items-center mb-6">
           <p>👋 Hola, <span className="font-bold">{session.user?.name}</span></p>
@@ -320,7 +329,6 @@ export default function ComposerPage() {
       <h1 className="text-4xl font-bold mb-8 text-center tracking-tight">Crear nueva publicación</h1>
 
       {!hasAnyConnection ? (
-        // ESTADO SIN CUENTAS ENLAZADAS
         <div className="bg-red-500/10 border border-red-500/20 p-8 rounded-2xl text-center">
             <h2 className="text-xl font-bold text-red-200 mb-2">¡Aún no has enlazado tus cuentas!</h2>
             <p className="text-slate-300 mb-6">Para crear publicaciones, primero debes conectar al menos una red social.</p>
@@ -332,14 +340,11 @@ export default function ComposerPage() {
             </Link>
         </div>
       ) : (
-        // ESTADO NORMAL
         <div className="flex flex-col lg:flex-row gap-8">
 
-            {/* FORMULARIO PRINCIPAL */}
             <div className="flex-1 backdrop-blur-xl bg-white/5 border border-white/10 p-8 rounded-2xl shadow-2xl">
             <form onSubmit={handleSubmit} className="space-y-6">
 
-                {/* Título y Cuerpo */}
                 <div className="space-y-4">
                 <input
                     className="w-full p-4 rounded-xl bg-black/20 border border-white/10 text-slate-200 placeholder-white/40 focus:bg-black/40 outline-none"
@@ -360,7 +365,6 @@ export default function ComposerPage() {
                     />
                     </div>
 
-                    {/* Configuración Global */}
                     <div className="md:w-64 flex flex-col gap-4 bg-black/20 p-4 rounded-xl border border-white/5">
                     <div className="flex flex-col gap-2">
                         <label className="text-xs font-bold text-slate-400 uppercase">Categoría</label>
@@ -381,21 +385,11 @@ export default function ComposerPage() {
                             />
                             Mostrar en Feed
                         </label>
-
-                        {/* Icono Info */}
-                        <div className="bg-white/20 text-slate-200/80 rounded-full w-4 h-4 flex items-center justify-center text-xs cursor-help font-serif italic transition hover:bg-white/40 hover:text-white">
-                            i
-                        </div>
-
-                        {/* TOOLTIP FLOTANTE (Corregido hacia abajo) */}
+                        <div className="bg-white/20 text-slate-200/80 rounded-full w-4 h-4 flex items-center justify-center text-xs cursor-help font-serif italic transition hover:bg-white/40 hover:text-white">i</div>
                         <div className="absolute top-full right-0 mt-2 w-72 bg-slate-900 border border-white/20 text-xs text-slate-300 p-4 rounded-xl shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed text-left">
                             <div className="absolute bottom-full right-1 -mb-[1px] border-8 border-transparent border-b-slate-900/50"></div>
-                            <p>
-                            Si tu publicación está configurada como <strong className="text-white">visible</strong>, otros usuarios podrán ver las publicaciones que has realizado a través de UniPost en el feed presente en el inicio.
-                            </p>
-                            <p className="mt-2 text-slate-400 italic">
-                            Asegúrate de que el contenido cumpla con los términos y condiciones de nuestra plataforma.
-                            </p>
+                            <p>Si tu publicación está configurada como <strong className="text-white">visible</strong>, otros usuarios podrán ver las publicaciones que has realizado a través de UniPost en el feed presente en el inicio.</p>
+                            <p className="mt-2 text-slate-400 italic">Asegúrate de que el contenido cumpla con los términos y condiciones de nuestra plataforma.</p>
                         </div>
                         </div>
                     </div>
@@ -403,7 +397,6 @@ export default function ComposerPage() {
                 </div>
                 </div>
 
-                {/* Multimedia */}
                 <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                 <div className="flex justify-between items-center mb-3">
                     <label className="block text-sm font-bold text-slate-200">📎 Multimedia</label>
@@ -429,18 +422,15 @@ export default function ComposerPage() {
                 )}
                 </div>
 
-                {/* Redes y Configuración (AJUSTADO: Selector arriba del texto) */}
                 <div className="space-y-4">
                 <label className="block text-sm font-bold text-slate-200">🌍 Variantes por Red</label>
                 {variants.map((v, i) => (
                     <div key={i} className="flex flex-col gap-3 bg-black/20 p-4 rounded-xl border border-white/10 animate-in slide-in-from-left-2 relative">
 
-                    {/* Botón Eliminar (Posición absoluta para no estorbar) */}
                     {variants.length > 1 && (
                         <button type="button" onClick={() => removeVariant(i)} className="absolute top-3 right-3 p-1.5 bg-red-500/20 text-red-200 rounded-lg hover:bg-red-500/40 transition text-xs">✕</button>
                     )}
 
-                    {/* 1. Selector de Red (Arriba) */}
                     <div className="w-full">
                         <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Red Social</label>
                         <select 
@@ -448,20 +438,17 @@ export default function ComposerPage() {
                             onChange={(e) => updateVariant(i, "network", e.target.value)} 
                             className="w-full p-3 bg-black/20 border border-white/10 text-slate-200 rounded-lg text-sm focus:bg-black/40 outline-none"
                         >
-                            {/* Solo mostramos redes conectadas que no estén seleccionadas YA (o la actual) */}
                             {ALL_POSSIBLE_NETWORKS
                                 .filter(net => connections[net]?.connected && (!variants.some(va => va.network === net) || net === v.network))
                                 .map(net => (
                                     <option key={net} value={net} className="bg-gray-900">{net}</option>
                             ))}
                         </select>
-                        {/* 🟢 NUEVO: Mostrar quién está publicando */}
                         <p className="text-[12px] text-green-400 mt-1 flex items-center gap-1">
                             ✅ Publicando como: <span className="font-bold">{connections[v.network]?.username || "Usuario"}</span>
                         </p>
                     </div>
 
-                    {/* 2. Texto (Abajo) */}
                     <div className="w-full">
                         <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Descripción / Copy</label>
                         <textarea
@@ -478,7 +465,6 @@ export default function ComposerPage() {
                 ))}
                 </div>
 
-                {/* Botón Agregar Red */}
                 {availableNetworks.length > 0 && (
                 <div className="flex gap-2">
                     <select id="newNetwork" className="p-2 bg-white/10 border border-white/20 rounded-lg text-sm text-slate-200" defaultValue="">
@@ -494,7 +480,6 @@ export default function ComposerPage() {
                 </div>
                 )}
 
-                {/* Scheduler */}
                 <div className="pt-4 border-t border-white/10">
                 <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg hover:bg-white/5 transition w-fit">
                     <input type="checkbox" checked={agendar} onChange={() => setAgendar(!agendar)} className="w-5 h-5 accent-indigo-500" />
@@ -527,7 +512,6 @@ export default function ComposerPage() {
             </form>
             </div>
 
-            {/* PANEL LATERAL DE RESTRICCIONES (ACTUALIZADO) */}
             <div className="lg:w-64 shrink-0 space-y-4">
             <div className="bg-white/5 border border-white/10 p-5 rounded-xl sticky top-6">
                 <h3 className="font-bold text-slate-200 mb-4 flex items-center gap-2">
@@ -562,7 +546,6 @@ export default function ComposerPage() {
                 </div>
                 </div>
 
-                {/* Alertas dinámicas */}
                 {variants.some(v => v.network === "TIKTOK") && (
                 <div className="mt-4 p-3 bg-pink-500/10 border border-pink-500/20 rounded-lg text-xs text-pink-200">
                     🎵 TikTok activo: Solo se permiten videos.

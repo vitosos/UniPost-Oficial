@@ -9,6 +9,7 @@ import BskyIcon from "@/app/assets/bsky.png";
 import IgIcon from "@/app/assets/ig.png";
 import FbIcon from "@/app/assets/fb.png";
 import TtIcon from "@/app/assets/tt.png";
+import XIcon from "@/app/assets/x.png";
 
 // TIPOS
 type Variant = {
@@ -60,6 +61,7 @@ const NETWORK_OPTIONS = [
   { label: "Facebook", value: "FACEBOOK" },
   { label: "Bluesky", value: "BLUESKY" },
   { label: "TikTok", value: "TIKTOK" },
+  { label: "X (Twitter)", value: "TWITTER" },
 ];
 
 export default function PublicacionesPage() {
@@ -155,6 +157,7 @@ export default function PublicacionesPage() {
       else if (variant.network === "INSTAGRAM") endpoint = "/api/publish/instagram";
       else if (variant.network === "FACEBOOK") endpoint = "/api/publish/facebook";
       else if (variant.network === "TIKTOK") endpoint = "/api/publish/tiktok";
+      else if (variant.network === "TWITTER") endpoint = "/api/publish/x_twitter";
       else throw new Error("Red no soportada");
 
       const res = await fetch(endpoint, {
@@ -341,6 +344,8 @@ export default function PublicacionesPage() {
                         if (net === "INSTAGRAM") iconSrc = IgIcon;
                         if (net === "FACEBOOK") iconSrc = FbIcon;
                         if (net === "TIKTOK") iconSrc = TtIcon;
+                        if (net === "TWITTER") iconSrc = XIcon;
+
 
                         if (!iconSrc) return null;
 
@@ -481,6 +486,8 @@ export default function PublicacionesPage() {
                                 v.network === "INSTAGRAM" ? "bg-pink-600 hover:bg-pink-500 text-white" :
                                   v.network === "FACEBOOK" ? "bg-blue-600 hover:bg-blue-500 text-white" :
                                     v.network === "TIKTOK" ? "bg-black border border-cyan-500/30 hover:bg-gray-900 text-white" :
+                                      v.network === "TWITTER" ? "bg-black border border-white/20 hover:bg-neutral-800 text-white" :
+                                    
                                       "bg-gray-500"
                             }`}
                         >
