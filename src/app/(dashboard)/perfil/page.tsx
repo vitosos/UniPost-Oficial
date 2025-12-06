@@ -155,7 +155,7 @@ export default function PerfilPage() {
               />
             </div>
             
-            <h1 className="text-3xl font-bold mb-1">👋 {session.user?.name || session.user?.email}</h1>
+            <h1 className="text-3xl font-bold mb-1"> {session.user?.name || session.user?.email}</h1>
             <p className="text-slate-200/70 mb-6 text-lg font-medium bg-white/10 inline-block px-4 py-1 rounded-full">{orgName}</p>
 
             {/* BOTONES ACCIÓN */}

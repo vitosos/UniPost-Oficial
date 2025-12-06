@@ -47,6 +47,7 @@ export default function EquiposPage() {
 
     const [loading, setLoading] = useState(true);
     const [isCreatingOrg, setIsCreatingOrg] = useState(false);
+    const [userOrgName, setUserOrgName] = useState("");
     
     // Permisos
     const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -92,6 +93,12 @@ export default function EquiposPage() {
             if (json.ok) {
                 setIsSuperAdmin(json.data.isSuperAdmin);
                 setCurrentUserRole(json.data.currentUserRole || "None");
+                if (json.data.userOrgName) {
+                    setUserOrgName(json.data.userOrgName);
+                } else if (json.data.organizations && json.data.userOrgId) {
+                    const myOrg = json.data.organizations.find((o: any) => o.id === json.data.userOrgId);
+                    if (myOrg) setUserOrgName(myOrg.name);
+                }
                 
                 if (json.data.organizations) setOrganizations(json.data.organizations);
                 setMetrics(json.data.metrics || null);
@@ -200,7 +207,9 @@ export default function EquiposPage() {
         finally { setUpdatingRole(prev => ({ ...prev, [userId]: false })); }
     }
 
-    const currentOrgName = organizations.find(o => o.id === metrics?.organizationId)?.name || "Mi Organización";
+    const currentOrgName = isSuperAdmin && selectedOrgId 
+    ? organizations.find(o => o.id === selectedOrgId)?.name 
+    : userOrgName || "Mi Organización";
     const SortIcon = ({ colKey }: { colKey: SortConfig["key"] }) => {
         if (sortConfig.key !== colKey) return <span className="text-slate-200/20 ml-1">↕</span>;
         return <span className="text-slate-200 ml-1">{sortConfig.direction === "asc" ? "↑" : "↓"}</span>;

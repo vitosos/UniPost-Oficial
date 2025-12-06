@@ -30,11 +30,18 @@ type UserConnections = {
   [key: string]: NetworkConnection;
 };
 
-// 1. 🆕 AGREGAMOS "TWITTER" A LA LISTA
 const ALL_POSSIBLE_NETWORKS = ["INSTAGRAM", "BLUESKY", "FACEBOOK", "TIKTOK", "TWITTER"] as const;
 const CATEGORIES = ["Ilustración", "Evento", "Emprendimiento", "Entretenimiento", "Otro"];
 
-// Zonas horarias IANA
+// 1. 🆕 LÍMITES DE CARACTERES
+const CHAR_LIMITS: Record<string, number> = {
+  TWITTER: 280,
+  BLUESKY: 300,
+  INSTAGRAM: 2200,
+  TIKTOK: 2200,
+  FACEBOOK: 63206, // Prácticamente ilimitado
+};
+
 const TIMEZONES = [
   { label: "Santiago / Buenos Aires", id: "America/Santiago" },
   { label: "Bogotá / Lima / Quito", id: "America/Bogota" },
@@ -73,7 +80,7 @@ export default function ComposerPage() {
   const [zona, setZona] = useState("America/Santiago");
   const [now, setNow] = useState(new Date());
 
-  // Cargar conexiones al inicio
+  // Cargar conexiones
   useEffect(() => {
     async function fetchConnections() {
         try {
@@ -81,8 +88,6 @@ export default function ComposerPage() {
             const data = await res.json();
             if (data.ok) {
                 setConnections(data.connections);
-                
-                // Inicializar variants con la primera red disponible
                 const available = ALL_POSSIBLE_NETWORKS.filter(net => data.connections[net]?.connected);
                 if (available.length > 0) {
                     setVariants([{ network: available[0], text: "" }]);
@@ -99,7 +104,6 @@ export default function ComposerPage() {
     fetchConnections();
   }, []);
 
-  // Reloj en vivo
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(timer);
@@ -113,17 +117,14 @@ export default function ComposerPage() {
     } catch (e) { return "--:--"; }
   };
 
-  // --- LÓGICA DE RESTRICCIONES ---
+  // --- RESTRICCIONES DE MEDIA ---
   const calculateRestrictions = () => {
     const networks = variants.map(v => v.network);
-
-    // Valores base
     let maxImages = 10;
     let maxVideos = 1;
     let allowMix = true;
     let minMedia = 0;
 
-    // Aplicamos restricciones
     if (networks.includes("TIKTOK")) {
       maxImages = 0; 
       minMedia = Math.max(minMedia, 1); 
@@ -133,10 +134,9 @@ export default function ComposerPage() {
       maxImages = Math.min(maxImages, 4);
       allowMix = false;
     }
-    // 2. 🆕 REGLAS PARA TWITTER (X)
     if (networks.includes("TWITTER")) {
-        maxImages = Math.min(maxImages, 4); // X permite máx 4 fotos
-        allowMix = false; // X API v2 prefiere no mezclar simple
+        maxImages = Math.min(maxImages, 4); 
+        allowMix = false; 
     }
     if (networks.includes("INSTAGRAM")) {
       minMedia = Math.max(minMedia, 1);
@@ -146,6 +146,19 @@ export default function ComposerPage() {
   };
 
   const restrictions = calculateRestrictions();
+
+  // 2. 🆕 VALIDACIÓN DE LONGITUD DE TEXTO
+  const checkTextLimits = () => {
+    for (const v of variants) {
+        const limit = CHAR_LIMITS[v.network] || 2000;
+        // Si el texto de la variante está vacío, usa el body principal
+        const effectiveLength = (v.text || body).length;
+        if (effectiveLength > limit) {
+            return { ok: false, network: v.network, limit };
+        }
+    }
+    return { ok: true };
+  };
 
   function canAddMedia(file: File, currentMedias: NewMedia[]) {
     const isVideo = file.type.startsWith("video");
@@ -197,7 +210,6 @@ export default function ComposerPage() {
     reader.readAsDataURL(selected);
   }
 
-  // --- Helpers de Media ---
   function moveMedia(index: number, direction: "left" | "right") {
     setMedias((prev) => {
       const newIndex = index + (direction === "left" ? -1 : 1);
@@ -215,15 +227,23 @@ export default function ComposerPage() {
     });
   }
 
-  // --- SUBMIT ---
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
 
+    // Validar media
     if (medias.length < restrictions.minMedia) {
       toast.error(`Debes subir al menos ${restrictions.minMedia} archivo(s) para continuar.`);
       setLoading(false);
       return;
+    }
+
+    // Validar textos
+    const textCheck = checkTextLimits();
+    if (!textCheck.ok) {
+        toast.error(`El texto para ${textCheck.network} excede el límite de ${textCheck.limit} caracteres.`);
+        setLoading(false);
+        return;
     }
 
     let schedulePayload = null;
@@ -303,18 +323,16 @@ export default function ComposerPage() {
   );
 
   const hasAnyConnection = Object.values(connections).some(c => c.connected);
+  
+  // Estado para bloquear botón si hay errores de texto en tiempo real
+  const isTextInvalid = !checkTextLimits().ok;
 
   if (loadingConnections) {
       return <div className="min-h-screen flex items-center justify-center text-white">Cargando perfiles...</div>;
   }
 
-  // ... (El resto del return es idéntico al anterior, solo cambia la lista de redes arriba)
-  // No necesitamos cambiar nada más visualmente porque mapeamos ALL_POSSIBLE_NETWORKS dinámicamente.
-  
   return (
     <div className="max-w-6xl mx-auto">
-      {/* ... (Header y estado sin conexión igual) ... */}
-      
       {session && (
         <div className="flex justify-between items-center mb-6">
           <p>👋 Hola, <span className="font-bold">{session.user?.name}</span></p>
@@ -358,11 +376,15 @@ export default function ComposerPage() {
                     <div className="flex-1">
                     <textarea
                         className="w-full p-4 rounded-xl bg-black/20 border border-white/10 text-slate-200 placeholder-white/40 focus:bg-black/40 outline-none h-40 resize-none"
-                        placeholder="Texto principal..."
+                        placeholder="Texto principal (se usará por defecto en todas las redes)..."
                         value={body}
                         onChange={(e) => setBody(e.target.value)}
                         required
                     />
+                    {/* Contador Global (referencial) */}
+                    <div className="text-right text-xs text-slate-500 mt-1">
+                        Caracteres: {body.length}
+                    </div>
                     </div>
 
                     <div className="md:w-64 flex flex-col gap-4 bg-black/20 p-4 rounded-xl border border-white/5">
@@ -377,19 +399,13 @@ export default function ComposerPage() {
                         <label className="text-xs font-bold text-slate-400 uppercase">Visibilidad</label>
                         <div className="flex items-center gap-2 relative group">
                         <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-200 select-none">
-                            <input
-                            type="checkbox"
-                            checked={visible}
-                            onChange={(e) => setVisible(e.target.checked)}
-                            className="w-4 h-4 accent-green-500 rounded"
-                            />
+                            <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} className="w-4 h-4 accent-green-500 rounded" />
                             Mostrar en Feed
                         </label>
                         <div className="bg-white/20 text-slate-200/80 rounded-full w-4 h-4 flex items-center justify-center text-xs cursor-help font-serif italic transition hover:bg-white/40 hover:text-white">i</div>
                         <div className="absolute top-full right-0 mt-2 w-72 bg-slate-900 border border-white/20 text-xs text-slate-300 p-4 rounded-xl shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed text-left">
                             <div className="absolute bottom-full right-1 -mb-[1px] border-8 border-transparent border-b-slate-900/50"></div>
                             <p>Si tu publicación está configurada como <strong className="text-white">visible</strong>, otros usuarios podrán ver las publicaciones que has realizado a través de UniPost en el feed presente en el inicio.</p>
-                            <p className="mt-2 text-slate-400 italic">Asegúrate de que el contenido cumpla con los términos y condiciones de nuestra plataforma.</p>
                         </div>
                         </div>
                     </div>
@@ -397,14 +413,13 @@ export default function ComposerPage() {
                 </div>
                 </div>
 
+                {/* --- SECCIÓN MULTIMEDIA --- */}
                 <div className="bg-white/5 p-4 rounded-xl border border-white/5">
                 <div className="flex justify-between items-center mb-3">
                     <label className="block text-sm font-bold text-slate-200">📎 Multimedia</label>
                     <span className="text-xs text-slate-400">{medias.length} archivo(s) seleccionados</span>
                 </div>
-
                 <input type="file" accept="image/*,video/*" onChange={handleFileChange} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-indigo-600 file:text-white cursor-pointer hover:file:bg-indigo-500 transition" />
-
                 {medias.length > 0 && (
                     <div className="mt-4 flex gap-4 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-white/20">
                     {medias.sort((a, b) => a.order - b.order).map((m, index) => (
@@ -422,47 +437,64 @@ export default function ComposerPage() {
                 )}
                 </div>
 
+                {/* --- SECCIÓN VARIANTES --- */}
                 <div className="space-y-4">
                 <label className="block text-sm font-bold text-slate-200">🌍 Variantes por Red</label>
-                {variants.map((v, i) => (
-                    <div key={i} className="flex flex-col gap-3 bg-black/20 p-4 rounded-xl border border-white/10 animate-in slide-in-from-left-2 relative">
+                {variants.map((v, i) => {
+                    const limit = CHAR_LIMITS[v.network] || 2000;
+                    const effectiveText = v.text || body;
+                    const count = effectiveText.length;
+                    const isOver = count > limit;
 
-                    {variants.length > 1 && (
-                        <button type="button" onClick={() => removeVariant(i)} className="absolute top-3 right-3 p-1.5 bg-red-500/20 text-red-200 rounded-lg hover:bg-red-500/40 transition text-xs">✕</button>
-                    )}
+                    return (
+                        <div key={i} className={`flex flex-col gap-3 bg-black/20 p-4 rounded-xl border transition-colors relative ${isOver ? "border-red-500/50 bg-red-500/5" : "border-white/10"}`}>
 
-                    <div className="w-full">
-                        <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Red Social</label>
-                        <select 
-                            value={v.network} 
-                            onChange={(e) => updateVariant(i, "network", e.target.value)} 
-                            className="w-full p-3 bg-black/20 border border-white/10 text-slate-200 rounded-lg text-sm focus:bg-black/40 outline-none"
-                        >
-                            {ALL_POSSIBLE_NETWORKS
-                                .filter(net => connections[net]?.connected && (!variants.some(va => va.network === net) || net === v.network))
-                                .map(net => (
-                                    <option key={net} value={net} className="bg-gray-900">{net}</option>
-                            ))}
-                        </select>
-                        <p className="text-[12px] text-green-400 mt-1 flex items-center gap-1">
-                            ✅ Publicando como: <span className="font-bold">{connections[v.network]?.username || "Usuario"}</span>
-                        </p>
-                    </div>
+                        {variants.length > 1 && (
+                            <button type="button" onClick={() => removeVariant(i)} className="absolute top-3 right-3 p-1.5 bg-red-500/20 text-red-200 rounded-lg hover:bg-red-500/40 transition text-xs">✕</button>
+                        )}
 
-                    <div className="w-full">
-                        <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Descripción / Copy</label>
-                        <textarea
-                        value={v.text}
-                        onChange={(e) => updateVariant(i, "text", e.target.value)}
-                        placeholder={`Texto específico para ${v.network} (opcional)`}
-                        rows={3}
-                        className="w-full p-3 rounded-lg bg-black/20 border border-white/10 text-slate-200 placeholder-white/30 resize-none overflow-hidden text-sm focus:bg-black/40 outline-none transition"
-                        style={{ minHeight: "80px" }}
-                        />
-                    </div>
+                        <div className="w-full">
+                            <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Red Social</label>
+                            <select 
+                                value={v.network} 
+                                onChange={(e) => updateVariant(i, "network", e.target.value)} 
+                                className="w-full p-3 bg-black/20 border border-white/10 text-slate-200 rounded-lg text-sm focus:bg-black/40 outline-none"
+                            >
+                                {ALL_POSSIBLE_NETWORKS
+                                    .filter(net => connections[net]?.connected && (!variants.some(va => va.network === net) || net === v.network))
+                                    .map(net => (
+                                        <option key={net} value={net} className="bg-gray-900">{net}</option>
+                                ))}
+                            </select>
+                            <p className="text-[12px] text-green-400 mt-1 flex items-center gap-1">
+                                ✅ Publicando como: <span className="font-bold">{connections[v.network]?.username || "Usuario"}</span>
+                            </p>
+                        </div>
 
-                    </div>
-                ))}
+                        <div className="w-full">
+                            <label className="text-xs text-gray-400 uppercase font-bold mb-1 flex justify-between">
+                                <span>Descripción / Copy</span>
+                                {/* 3. CONTADOR DE CARACTERES */}
+                                <span className={`font-mono ${isOver ? "text-red-400 font-bold" : "text-slate-500"}`}>
+                                    {count} / {limit}
+                                </span>
+                            </label>
+                            <textarea
+                                value={v.text}
+                                onChange={(e) => updateVariant(i, "text", e.target.value)}
+                                placeholder={`Texto específico para ${v.network} (opcional, si vacío usa el principal)`}
+                                rows={3}
+                                className={`w-full p-3 rounded-lg bg-black/20 border text-slate-200 placeholder-white/30 resize-none overflow-hidden text-sm focus:bg-black/40 outline-none transition ${isOver ? "border-red-500 focus:border-red-500" : "border-white/10"}`}
+                                style={{ minHeight: "80px" }}
+                            />
+                            {isOver && (
+                                <p className="text-red-400 text-xs mt-1">⚠️ El texto excede el límite de {limit} caracteres para esta red.</p>
+                            )}
+                        </div>
+
+                        </div>
+                    );
+                })}
                 </div>
 
                 {availableNetworks.length > 0 && (
@@ -506,12 +538,16 @@ export default function ComposerPage() {
                 )}
                 </div>
 
-                <button disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold text-lg shadow-xl hover:shadow-2xl transition disabled:opacity-50 transform active:scale-[0.99]">
-                {loading ? "Procesando..." : agendar ? "📅 Agendar Publicación" : "📁 Guardar Publicación"}
+                <button 
+                    disabled={loading || isTextInvalid} 
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold text-lg shadow-xl hover:shadow-2xl transition disabled:opacity-50 disabled:bg-gray-600 transform active:scale-[0.99]"
+                >
+                {loading ? "Procesando..." : isTextInvalid ? "⚠️ Corrige los errores de texto" : agendar ? "📅 Agendar Publicación" : "📁 Guardar Publicación"}
                 </button>
             </form>
             </div>
 
+            {/* --- SIDEBAR DE REGLAS --- */}
             <div className="lg:w-64 shrink-0 space-y-4">
             <div className="bg-white/5 border border-white/10 p-5 rounded-xl sticky top-6">
                 <h3 className="font-bold text-slate-200 mb-4 flex items-center gap-2">
@@ -548,7 +584,7 @@ export default function ComposerPage() {
 
                 {variants.some(v => v.network === "TIKTOK") && (
                 <div className="mt-4 p-3 bg-pink-500/10 border border-pink-500/20 rounded-lg text-xs text-pink-200">
-                    🎵 TikTok activo: Solo se permiten videos.
+                    TikTok activo: Solo se permiten videos.
                 </div>
                 )}
             </div>

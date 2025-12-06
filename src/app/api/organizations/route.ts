@@ -21,7 +21,14 @@ export async function GET(request: Request) {
 
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { id: true, roleID: true, organizationId: true },
+    select: { 
+        id: true, 
+        roleID: true, 
+        organizationId: true,
+        Organization: {
+            select: { name: true }
+        }
+    },
   });
 
   if (!user) {
@@ -44,7 +51,8 @@ export async function GET(request: Request) {
     let responseData: any = {
       isSuperAdmin,
       userOrgId: user.organizationId,
-      currentUserRole: "None", // Rol dentro de la organización (Miembro/Manager)
+      userOrgName: user.Organization?.name || null, 
+      currentUserRole: "None", // Rol dentro de la organización
       members: [],
       orphanedUsers: [],
     };

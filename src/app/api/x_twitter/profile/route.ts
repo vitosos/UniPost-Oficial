@@ -7,7 +7,7 @@ import { TwitterApi } from "twitter-api-v2";
 import fs from "fs/promises";
 import path from "path";
 
-// Helper para guardar avatar localmente (igual que en callback)
+// Helper para guardar avatar localmente
 async function saveAvatarLocally(url: string, userId: number, twitterId: string): Promise<string | null> {
   try {
     const res = await fetch(url.replace("_normal", "")); // Mejor calidad
@@ -22,25 +22,35 @@ async function saveAvatarLocally(url: string, userId: number, twitterId: string)
   } catch (e) { return null; }
 }
 
-export async function GET() {
+export async function GET(req: Request) { // 👈 1. Aceptamos Request
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
-  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-  if (!user) return NextResponse.json({ ok: false }, { status: 404 });
+  // 2. Determinar Target User (Igual que en métricas)
+  const { searchParams } = new URL(req.url);
+  const queryId = searchParams.get("userId");
+  
+  const currentUser = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!currentUser) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
 
+  let targetUserId = currentUser.id;
+  if (queryId) {
+      targetUserId = Number(queryId);
+  }
+
+  // 3. Buscar credenciales del usuario OBJETIVO
   const xAccess = await prisma.x_Access.findFirst({
-    where: { userId: user.id, redSocial: 5 },
+    where: { userId: targetUserId, redSocial: 5 }, // 👈 Usamos targetUserId
   });
 
   if (!xAccess) return NextResponse.json({ ok: false, error: "Twitter no conectado" });
 
-  // 1. Validar que tengamos el secret (OAuth 1.0a lo requiere)
+  // Validar secret (OAuth 1.0a)
   if (!xAccess.accessSecret) {
       return NextResponse.json({ ok: false, error: "Re-link required (OAuth 1.0a update)" });
   }
 
-  // 2. Caché: Si los datos son frescos (< 24h) y tenemos avatar, los devolvemos
+  // 4. Caché: Si los datos son frescos (< 24h) y tenemos avatar, los devolvemos
   const now = new Date();
   const lastUpdate = new Date(xAccess.updatedAt);
   const hoursDiff = (now.getTime() - lastUpdate.getTime()) / (1000 * 60 * 60);
@@ -51,17 +61,16 @@ export async function GET() {
       ok: true,
       profile: {
         username: xAccess.usuarioRed,
-        name: xAccess.screenName || xAccess.usuarioRed, // screenName es el @handle en v1
-        avatar: xAccess.avatar, 
+        name: xAccess.screenName || xAccess.usuarioRed,
+        avatar: xAccess.avatar,
         followers: xAccess.follows,
         tweets: xAccess.metricaB,
       },
     });
   }
 
-  // 3. Actualizar desde API de X (Usando twitter-api-v2)
+  // 5. Actualizar desde API de X
   try {
-    // Instanciamos el cliente con las 4 llaves (Consumer Key/Secret + Access Token/Secret)
     const client = new TwitterApi({
         appKey: process.env.TWITTER_API_KEY!,
         appSecret: process.env.TWITTER_API_SECRET!,
@@ -69,7 +78,6 @@ export async function GET() {
         accessSecret: decrypt(xAccess.accessSecret),
     });
 
-    // Usamos v2.me() para obtener datos del usuario actual
     const me = await client.v2.me({
         "user.fields": ["profile_image_url", "public_metrics"],
     });
@@ -77,12 +85,12 @@ export async function GET() {
     const data = me.data;
     const metrics = data.public_metrics || {};
 
-    // 4. Procesar y Guardar Avatar Localmente
+    // Procesar Avatar Localmente (Usando targetUserId)
     const remoteUrl = data.profile_image_url;
     let finalAvatarUrl = xAccess.avatar;
 
     if (remoteUrl) {
-        const savedPath = await saveAvatarLocally(remoteUrl, user.id, xAccess.twitterId);
+        const savedPath = await saveAvatarLocally(remoteUrl, targetUserId, xAccess.twitterId); // 👈 targetUserId
         if (savedPath) {
             finalAvatarUrl = savedPath;
         } else if (!finalAvatarUrl) {
@@ -90,11 +98,11 @@ export async function GET() {
         }
     }
 
-    // 5. Actualizar BD
+    // Actualizar BD
     await prisma.x_Access.update({
         where: { id: xAccess.id },
         data: {
-            usuarioRed: data.username, // username es el @handle en v2
+            usuarioRed: data.username,
             screenName: data.username, 
             avatar: finalAvatarUrl,
             follows: metrics.followers_count || 0,
@@ -107,7 +115,7 @@ export async function GET() {
         ok: true,
         profile: {
             username: data.username,
-            name: data.name, // name es el nombre visible
+            name: data.name,
             avatar: finalAvatarUrl,
             followers: metrics.followers_count,
             tweets: metrics.tweet_count,
@@ -117,7 +125,6 @@ export async function GET() {
   } catch (error: any) {
     console.error("X Profile Error:", error);
     
-    // Fallback a caché si existe
     if (hasData) {
         return NextResponse.json({
             ok: true,
