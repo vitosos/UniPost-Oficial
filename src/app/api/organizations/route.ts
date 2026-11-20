@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { readJson, toPositiveInt } from "@/lib/validation";
+
+const PLANS = ["FREE", "PRO", "ENTERPRISE"];
+const ROLES = ["Miembro", "Manager"];
 
 // Helper para serializar BigInt (por si usas BigInt en IDs o Roles)
 function serializeBigInt(obj: any) {
@@ -44,11 +48,13 @@ export async function GET(request: Request) {
   
   let targetOrgId = user.organizationId;
   if (isSuperAdmin && queryOrgId) {
-    targetOrgId = parseInt(queryOrgId);
+    const parsed = toPositiveInt(queryOrgId);
+    if (!parsed) return NextResponse.json({ ok: false, error: "orgId inválido" }, { status: 400 });
+    targetOrgId = parsed;
   }
 
   try {
-    let responseData: any = {
+    const responseData: any = {
       isSuperAdmin,
       userOrgId: user.organizationId,
       userOrgName: user.Organization?.name || null, 
@@ -157,11 +163,16 @@ export async function POST(request: Request) {
 
   if (roleId < 4) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
 
-  const { name, plan } = await request.json();
+  const { name, plan } = await readJson<{ name: unknown; plan: unknown }>(request);
+  const orgName = typeof name === "string" ? name.trim() : "";
+  if (orgName.length < 2 || orgName.length > 80) {
+    return NextResponse.json({ ok: false, error: "Nombre inválido" }, { status: 400 });
+  }
+  const orgPlan = typeof plan === "string" && PLANS.includes(plan) ? plan : "FREE";
 
   try {
     const newOrg = await prisma.organization.create({
-      data: { name, plan: plan || "FREE" },
+      data: { name: orgName, plan: orgPlan },
     });
     return NextResponse.json({ ok: true, data: newOrg });
   } catch (error) {
@@ -178,8 +189,9 @@ export async function DELETE(request: Request) {
     if (Number(user?.roleID || 0) < 4) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
 
     const { searchParams } = new URL(request.url);
-    const id = Number(searchParams.get("id"));
-    
+    const id = toPositiveInt(searchParams.get("id"));
+    if (!id) return NextResponse.json({ ok: false, error: "id inválido" }, { status: 400 });
+
     try {
         await prisma.organization.delete({ where: { id } });
         return NextResponse.json({ ok: true });
@@ -198,9 +210,15 @@ export async function PUT(request: Request) {
 
   if (requesterRole < 4) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
 
-  const { userId, newOrgId } = await request.json();
+  const body = await readJson<{ userId: unknown; newOrgId: unknown }>(request);
+  const userId = toPositiveInt(body.userId);
+  const newOrgId = toPositiveInt(body.newOrgId);
+  if (!userId || !newOrgId) return NextResponse.json({ ok: false, error: "Datos inválidos" }, { status: 400 });
 
   try {
+    const org = await prisma.organization.findUnique({ where: { id: newOrgId }, select: { id: true } });
+    if (!org) return NextResponse.json({ ok: false, error: "Organization not found" }, { status: 404 });
+
     const targetUser = await prisma.user.findUnique({ where: { id: Number(userId) } });
     if (!targetUser) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
     
@@ -250,9 +268,12 @@ export async function PATCH(request: Request) {
     // Solo roles 4 o 5 pueden cambiar roles internos
     if (requesterRole < 4) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   
-    const { userId, organizationId, newRole } = await request.json();
+    const body = await readJson<{ userId: unknown; organizationId: unknown; newRole: unknown }>(request);
+    const userId = toPositiveInt(body.userId);
+    const organizationId = toPositiveInt(body.organizationId);
+    const newRole = body.newRole;
 
-    if (!["Miembro", "Manager"].includes(newRole)) {
+    if (!userId || !organizationId || typeof newRole !== "string" || !ROLES.includes(newRole)) {
         return NextResponse.json({ ok: false, error: "Invalid role" }, { status: 400 });
     }
   

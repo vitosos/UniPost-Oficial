@@ -1,32 +1,20 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { consumeOtp, isOtpFormat } from "@/lib/otp";
+import { normalizeEmail, readJson } from "@/lib/validation";
 
 export async function POST(req: Request) {
-  const { email, code } = await req.json();
+  const body = await readJson<{ email: string; code: string }>(req);
+  const email = normalizeEmail(body.email);
 
-  // Buscar el token de verificación en la base de datos
-  const token = await prisma.verificationToken.findFirst({
-    where: {
-      identifier: email,
-      token: code,
-      expires: { gt: new Date() }, // Verificar que no haya expirado
-    },
-  });
-
-  if (!token) {
+  if (!email || !isOtpFormat(body.code) || !(await consumeOtp("verify", email, body.code))) {
     return NextResponse.json({ ok: false, error: "INVALID_OR_EXPIRED" }, { status: 400 });
   }
 
-  // Marcar al usuario como verificado
-  await prisma.user.update({
-    where: { email },
+  await prisma.user.updateMany({
+    where: { email: { equals: email, mode: "insensitive" } },
     data: { emailVerified: new Date() },
   });
 
-  // Eliminar el token de verificación después de usarlo
-  await prisma.verificationToken.delete({
-    where: { id: token.id },
-  });
-
-  return NextResponse.json({ ok: true, message: "Correo verificado" });
+  return NextResponse.json({ ok: true });
 }

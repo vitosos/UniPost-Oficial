@@ -1,293 +1,218 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
 import { PublicFeed } from "@/components/PublicFeed";
-import Image from "next/image";
-import toast from "react-hot-toast";
+import { Button, ButtonLink } from "@/components/ui";
+import { NETWORKS, NETWORK_KEYS } from "@/lib/networks";
 import UniPostLogo from "./assets/UniPost.png";
 
-// --- IMPORTACIÓN DE ÍCONOS DE REDES ---
-import BskyIcon from "./assets/bsky.png";
-import IgIcon from "./assets/ig.png";
-import TtIcon from "./assets/tt.png";
-import FbIcon from "./assets/fb.png";
-import XIcon from "./assets/x.png";
+const NAV = [
+  { href: "#feed", label: "Comunidad" },
+  { href: "#features", label: "Características" },
+  { href: "#about", label: "Sobre nosotros" },
+];
+
+const FEATURES = [
+  { icon: "🌐", title: "Cinco redes, un formulario", text: "Instagram, Facebook, X, Bluesky y TikTok desde el mismo lugar, con textos personalizados por red." },
+  { icon: "📅", title: "Programa con anticipación", text: "Agenda tus publicaciones en tu zona horaria y UniPost las publica por ti." },
+  { icon: "📊", title: "Métricas claras", text: "Me gusta, comentarios y hashtags que mejor funcionan, en un solo panel." },
+  { icon: "👥", title: "Pensado para equipos", text: "Organizaciones con roles para que managers sigan el rendimiento de cada miembro." },
+];
+
+const STEPS = [
+  { n: 1, title: "Conecta tus redes", text: "Vincula tus cuentas de forma segura en un par de clics." },
+  { n: 2, title: "Escribe una vez", text: "Redacta, sube tus imágenes o video y ajusta el texto para cada red." },
+  { n: 3, title: "Publica o programa", text: "Publica al instante o deja que UniPost lo haga a la hora indicada." },
+];
+
+const networkNames = NETWORK_KEYS.map((k) => NETWORKS[k].label);
+const networkList = `${networkNames.slice(0, -1).join(", ")} y ${networkNames[networkNames.length - 1]}`;
 
 export default function HomePage() {
-  // 1. Desestructuramos 'status' para controlar la carga inicial
-  const { data: session, status } = useSession();
-  
-  // 2. Estados para UI
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const { status } = useSession();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  // 3. Función Logout con Feedback
-  const handleLogout = async () => {
-    setIsLoggingOut(true);
-    toast.loading("Cerrando sesión...", { duration: 2000 });
+  async function handleLogout() {
+    setLoggingOut(true);
     await signOut({ callbackUrl: "/" });
-  };
+  }
 
-  // 4. Componente auxiliar para los Botones de Auth (DRY)
-  const AuthButtons = ({ mobile = false }) => {
-    // A) MIENTRAS CARGA: Mostramos un placeholder (esqueleto) para evitar parpadeo
-    if (status === "loading") {
-      return (
-        <div className={`flex gap-3 ${mobile ? "flex-col w-full" : "items-center"}`}>
-          <div className="h-10 w-24 bg-white/10 animate-pulse rounded-xl"></div>
-          <div className="h-10 w-24 bg-white/10 animate-pulse rounded-xl"></div>
-        </div>
-      );
-    }
-
-    // B) SI NO HAY SESIÓN: Mostrar Login / Register
+  const AuthButtons = ({ mobile = false }: { mobile?: boolean }) => {
+    const w = mobile ? "w-full" : "";
+    if (status === "loading") return <div className={`h-10 animate-pulse rounded-xl bg-white/10 ${mobile ? "w-full" : "w-48"}`} />;
     if (status === "unauthenticated") {
       return (
         <>
-          <a href="/login" className={`rounded-xl border border-white/30 px-4 py-2 font-semibold text-slate-200 backdrop-blur-sm hover:bg-white/10 transition text-center ${mobile ? "w-full" : ""}`}>
-            Iniciar sesión
-          </a>
-          <a href="/register" className={`rounded-xl bg-white px-4 py-2 font-semibold text-slate-900 shadow hover:shadow-lg transition text-center ${mobile ? "w-full" : ""}`}>
-            Registrarse
-          </a>
+          <ButtonLink href="/login" variant="ghost" className={w}>Iniciar sesión</ButtonLink>
+          <ButtonLink href="/register" className={w}>Crear cuenta</ButtonLink>
         </>
       );
     }
-
-    // C) SI HAY SESIÓN: Mostrar Ir a App / Cerrar Sesión
     return (
       <>
-        <a href="/composer" className={`rounded-xl bg-white px-4 py-2 font-semibold text-slate-900 shadow hover:shadow-lg transition text-center ${mobile ? "w-full" : ""}`}>
-          Ir a la App
-        </a>
-        <button 
-          onClick={handleLogout} 
-          disabled={isLoggingOut}
-          className={`rounded-xl border border-white/30 px-4 py-2 font-semibold text-slate-200 backdrop-blur-sm hover:bg-white/10 transition text-center ${mobile ? "w-full" : ""} ${isLoggingOut ? "opacity-50 cursor-not-allowed" : ""}`}
-        >
-          {isLoggingOut ? "Cerrando..." : "Cerrar sesión"}
-        </button>
+        <Button variant="ghost" onClick={handleLogout} loading={loggingOut} className={w}>Cerrar sesión</Button>
+        <ButtonLink href="/composer" className={w}>Ir a mi panel</ButtonLink>
       </>
     );
   };
 
   return (
-    <main className="min-h-screen w-full bg-gradient-to-b from-slate-950 via-purple-950 to-slate-900 text-slate-200">
+    <main className="min-h-screen w-full text-slate-200">
+      <header className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/70 backdrop-blur-md">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
+          <Link href="/" className="flex items-center gap-2.5">
+            <Image src={UniPostLogo} alt="" width={32} height={32} className="h-8 w-8" />
+            <span className="text-lg font-semibold tracking-tight text-white">UniPost</span>
+          </Link>
 
-      {/* Top Nav */}
-      <header className="sticky top-0 z-50 mx-auto flex max-w-7xl items-center justify-between px-6 py-4 backdrop-blur-md bg-black/10 rounded-b-2xl border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <Image
-            src={UniPostLogo}
-            alt="UniPost Logo"
-            width={48}
-            height={48}
-            className="h-8 w-8"
-          />
-          <span className="text-lg font-semibold tracking-wide">UniPost</span>
+          <nav className="hidden items-center gap-6 text-sm md:flex" aria-label="Principal">
+            {NAV.map((n) => (
+              <a key={n.href} href={n.href} className="text-slate-400 transition hover:text-white">{n.label}</a>
+            ))}
+            <div className="ml-2 flex items-center gap-2">
+              <AuthButtons />
+            </div>
+          </nav>
+
+          <button
+            className="rounded-lg p-2 text-slate-200 transition hover:bg-white/10 md:hidden"
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-expanded={menuOpen}
+            aria-controls="mobile-menu"
+            aria-label={menuOpen ? "Cerrar menú" : "Abrir menú"}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-6 w-6" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d={menuOpen ? "M6 18L18 6M6 6l12 12" : "M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"} />
+            </svg>
+          </button>
         </div>
 
-        {/* --- DESKTOP NAV --- */}
-        <nav className="hidden items-center gap-6 text-sm md:flex">
-          <a href="#feed" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Feed</a>
-          <a href="#features" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Características</a>
-          <a href="#about" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Sobre Nosotros</a>
-          <a href="/term_cond" className="opacity-90 transition hover:opacity-100 hover:text-slate-200">Términos y Condiciones</a>
-
-          <div className="flex items-center gap-3 ml-4">
-            <AuthButtons />
+        {menuOpen && (
+          <div id="mobile-menu" className="border-t border-white/10 px-4 pb-5 md:hidden">
+            <nav className="flex flex-col py-2" aria-label="Principal">
+              {NAV.map((n) => (
+                <a key={n.href} href={n.href} onClick={() => setMenuOpen(false)} className="border-b border-white/5 py-3 text-slate-300 hover:text-white">{n.label}</a>
+              ))}
+              <Link href="/term_cond" className="py-3 text-slate-300 hover:text-white">Términos y condiciones</Link>
+            </nav>
+            <div className="flex flex-col gap-2">
+              <AuthButtons mobile />
+            </div>
           </div>
-        </nav>
-
-        {/* --- MOBILE HAMBURGER BUTTON --- */}
-        <button 
-          className="md:hidden p-2 text-slate-200 hover:bg-white/10 rounded-lg transition"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-        >
-          {mobileMenuOpen ? (
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-            </svg>
-          )}
-        </button>
+        )}
       </header>
 
-      {/* --- MOBILE MENU OVERLAY --- */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 top-[80px] z-40 bg-slate-950/95 backdrop-blur-xl p-6 flex flex-col gap-6 animate-in slide-in-from-top-5">
-          <nav className="flex flex-col gap-4 text-lg font-medium text-center">
-            <a href="#feed" onClick={() => setMobileMenuOpen(false)} className="py-2 border-b border-white/10 hover:text-white">Feed</a>
-            <a href="#features" onClick={() => setMobileMenuOpen(false)} className="py-2 border-b border-white/10 hover:text-white">Características</a>
-            <a href="#about" onClick={() => setMobileMenuOpen(false)} className="py-2 border-b border-white/10 hover:text-white">Sobre Nosotros</a>
-          </nav>
-          
-          <div className="flex flex-col gap-3 mt-4">
-            <AuthButtons mobile={true} />
-          </div>
-        </div>
-      )}
-
-      {/* Hero Section */}
-      <section className="relative mx-auto max-w-7xl px-6 pb-10 pt-10 md:pt-24 lg:pb-24">
-        {/* Fondos borrosos */}
-        <div className="absolute inset-0 -z-10 overflow-hidden">
-          <div className="absolute left-1/2 top-12 h-72 w-72 -translate-x-1/2 rounded-full bg-white/20 blur-3xl" />
-          <div className="absolute bottom-0 right-10 h-40 w-40 rounded-full bg-black/10 blur-2xl" />
-        </div>
-
+      {/* Hero */}
+      <section className="mx-auto max-w-7xl px-4 pb-16 pt-14 sm:px-6 md:pt-24">
         <div className="grid items-center gap-12 md:grid-cols-2">
-
-          {/* Texto Hero */}
           <div>
-            <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold ring-1 ring-white/20">
-              <span>⚡️ Nuevo</span>
-              <span className="opacity-90">Publica en 4 redes con 1 click</span>
-            </div>
-            <h1 className="text-4xl font-black tracking-tight drop-shadow sm:text-6xl lg:text-7xl">
-              Cuida tus tiempos. <span className="inline-block bg-white/90 px-3 text-slate-900 rounded-lg">Un solo panel</span>,
-              todas tus redes.
+            <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-indigo-400/30 bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-200">
+              Publica en {NETWORK_KEYS.length} redes desde un solo lugar
+            </p>
+            <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
+              Un solo panel para <span className="bg-gradient-to-r from-indigo-300 to-fuchsia-300 bg-clip-text text-transparent">todas tus redes</span>.
             </h1>
-            <p className="mt-6 max-w-xl text-lg opacity-95 leading-relaxed">
-              Ahorra horas cada semana con programación inteligente, publicaciones simultáneas y un flujo simple para equipos. UniPost es tu copiloto de Community Management.
+            <p className="mt-6 max-w-xl text-lg leading-relaxed text-slate-400">
+              Escribe una vez, adapta el texto para cada red y publica o programa en segundos. UniPost es tu copiloto de Community Management.
             </p>
-
-            <p className="mt-5 max-w-xl text-base/7 opacity-95 sm:text-lg/8">
-              Actualmente con soporte completo para: <span className="inline-block bg-white/90 px-2 text-slate-900">Instagram Business, Facebook, Bluesky y X (Twitter)</span> disponible
-            </p>
-
-            <div className="mt-8 flex flex-wrap items-center gap-4">
-              <a href="#features" className="rounded-2xl bg-white px-8 py-4 text-lg font-bold text-slate-900 shadow-xl transition hover:scale-105 hover:shadow-2xl">Ver características</a>
+            <div className="mt-8 flex flex-wrap gap-3">
+              {status === "authenticated" ? (
+                <ButtonLink href="/composer" size="lg">Crear una publicación</ButtonLink>
+              ) : (
+                <ButtonLink href="/register" size="lg">Comenzar gratis</ButtonLink>
+              )}
+              <ButtonLink href="#features" size="lg" variant="secondary">Ver características</ButtonLink>
             </div>
+            <p className="mt-6 text-sm text-slate-500">Compatible con {networkList}.</p>
           </div>
 
-          {/* Collage de Redes Sociales */}
-          <div className="relative hidden md:flex items-center justify-center lg:ml-10">
-            {/* Brillo de fondo */}
-            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/30 to-fuchsia-500/30 blur-[60px] rounded-full"></div>
-
-            {/* Contenedor del grid del collage */}
-            <div className="relative z-10 grid grid-cols-3 grid-rows-3 gap-4 p-4 transform scale-110 lg:scale-125">
-
-              {/* Instagram - Arriba Izquierda */}
-              <div className="col-start-1 row-start-1 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 -rotate-[8deg] hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
-                <Image src={IgIcon} alt="Instagram" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg" />
-              </div>
-
-              {/* 🆕 X (Twitter) - Arriba Centro */}
-              <div className="col-start-2 row-start-1 flex justify-center items-end z-20 translate-y-4">
-                <div className="p-3 bg-black/40 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 rotate-[12deg] hover:rotate-0 transition-all duration-300 hover:scale-110">
-                  <Image src={XIcon} alt="X" width={80} height={80} className="w-16 h-16 lg:w-20 lg:h-20 drop-shadow-lg" />
+          <div className="relative hidden items-center justify-center md:flex" aria-hidden="true">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-r from-indigo-500/25 to-fuchsia-500/25 blur-[70px]" />
+            <div className="relative grid grid-cols-3 gap-5">
+              {NETWORK_KEYS.map((k, i) => (
+                <div
+                  key={k}
+                  className={`rounded-3xl border border-white/15 bg-white/10 p-4 shadow-2xl backdrop-blur-xl transition duration-300 hover:rotate-0 hover:scale-105 ${["-rotate-6", "rotate-6 translate-y-6", "-rotate-3", "rotate-3 -translate-y-4", "-rotate-6 translate-y-4"][i]} ${i === 3 ? "col-start-1" : ""}`}
+                >
+                  <Image src={NETWORKS[k].icon} alt="" width={80} height={80} className="h-16 w-16 lg:h-20 lg:w-20" />
                 </div>
-              </div>
-
-              {/* Facebook - Arriba Derecha */}
-              <div className="col-start-3 row-start-1 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 rotate-[6deg] translate-y-6 hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
-                <Image src={FbIcon} alt="Facebook" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg" />
-              </div>
-
-              {/* Centro - Ícono "+" */}
-              <div className="col-start-2 row-start-2 flex items-center justify-center z-30">
-                <div className="bg-white/20 p-6 rounded-full backdrop-blur-md shadow-[0_0_30px_rgba(255,255,255,0.3)] border-2 border-white/40 animate-pulse hover:animate-none transition hover:scale-110">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={5} stroke="currentColor" className="w-12 h-12 lg:w-16 lg:h-16 text-slate-200 drop-shadow-xl">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                  </svg>
-                </div>
-              </div>
-
-              {/* Bluesky - Abajo Izquierda */}
-              <div className="col-start-1 row-start-3 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 rotate-[4deg] -translate-y-6 hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
-                <Image src={BskyIcon} alt="Bluesky" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg scale-95" />
-              </div>
-
-              {/* TikTok - Abajo Derecha */}
-              <div className="col-start-3 row-start-3 p-3 bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 -rotate-[6deg] hover:rotate-0 transition-all duration-300 hover:scale-110 hover:z-20">
-                <Image src={TtIcon} alt="TikTok" width={80} height={80} className="w-20 h-20 lg:w-24 lg:h-24 drop-shadow-lg" />
-              </div>
+              ))}
             </div>
           </div>
-          {/* --- Fin del Collage --- */}
-
         </div>
       </section>
 
-      {/* FEED SECTION */}
-      <div id="feed" className="scroll-mt-24">
+      {/* Cómo funciona */}
+      <section className="mx-auto max-w-7xl px-4 py-12 sm:px-6">
+        <ol className="grid gap-4 md:grid-cols-3">
+          {STEPS.map((s) => (
+            <li key={s.n} className="flex gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white">{s.n}</span>
+              <div>
+                <h3 className="font-semibold text-white">{s.title}</h3>
+                <p className="mt-1 text-sm text-slate-400">{s.text}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <div id="feed" className="scroll-mt-20 pt-12">
         <PublicFeed />
       </div>
 
       {/* Características */}
-      <section id="features" className="mx-auto max-w-7xl px-6 py-20 scroll-mt-24">
-        <h2 className="text-center text-4xl font-extrabold mb-4">¿Por qué UniPost?</h2>
-        <p className="mx-auto mb-12 max-w-2xl text-center text-lg opacity-90">Herramientas diseñadas para potenciar tu presencia digital sin complicarte la vida.</p>
-
-        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
-          {[
-            { icon: "🌍", text: "¡Soporte para 3 redes sociales y creciendo!" },
-            { icon: "📅", text: "Agenda tus publicaciones para el momento perfecto." },
-            { icon: "📊", text: "Obtén métricas y comprende tus plataformas." },
-            { icon: "⚡", text: "Optimiza tus tiempos, todas tus redes en un solo lugar." },
-          ].map((f, i) => (
-            <div key={i} className="group flex flex-col items-center text-center rounded-3xl border border-white/20 bg-white/5 p-8 shadow-xl backdrop-blur transition-all duration-300 hover:bg-white/10 hover:-translate-y-2 hover:shadow-2xl hover:border-white/30">
-              <div className="mb-6 text-5xl bg-white/10 p-4 rounded-2xl shadow-inner group-hover:scale-110 transition">{f.icon}</div>
-              <h3 className="text-xl font-bold leading-snug">{f.text}</h3>
+      <section id="features" className="mx-auto max-w-7xl scroll-mt-20 px-4 py-20 sm:px-6">
+        <h2 className="mb-3 text-center text-3xl font-bold tracking-tight text-white sm:text-4xl">¿Por qué UniPost?</h2>
+        <p className="mx-auto mb-12 max-w-2xl text-center text-slate-400">Herramientas para potenciar tu presencia digital sin complicarte la vida.</p>
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURES.map((f) => (
+            <div key={f.title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 transition hover:border-white/20 hover:bg-white/[0.06]">
+              <div className="mb-4 inline-flex rounded-xl bg-white/10 p-3 text-2xl" aria-hidden="true">{f.icon}</div>
+              <h3 className="font-semibold text-white">{f.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-400">{f.text}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* Sobre Nosotros */}
-      <section id="about" className="mx-auto max-w-5xl px-6 pb-24 pt-10 scroll-mt-24">
-        <div className="relative rounded-[3rem] bg-gradient-to-br from-black/30 to-black/10 border border-white/10 p-8 md:p-16 backdrop-blur-2xl shadow-3xl overflow-hidden">
-          <div className="absolute top-0 right-0 -mr-20 -mt-20 w-64 h-64 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="absolute bottom-0 left-0 -ml-20 -mb-20 w-64 h-64 bg-rose-500/20 rounded-full blur-3xl pointer-events-none"></div>
-
-          <div className="relative z-10 flex flex-col items-center text-center">
-            <div className="flex items-center gap-5 mb-10">
-              <div className="bg-white/90 p-3 rounded-2xl shadow-xl shadow-white/20">
-                <Image src={UniPostLogo} alt="UniPost Logo" width={80} height={80} className="h-16 w-16" />
-              </div>
-              <h2 className="text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-white to-white/70">UniPost</h2>
+      {/* Sobre nosotros */}
+      <section id="about" className="mx-auto max-w-4xl scroll-mt-20 px-4 pb-24 sm:px-6">
+        <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-8 md:p-12">
+          <div className="mb-8 flex items-center gap-4">
+            <div className="rounded-2xl bg-white/90 p-2.5">
+              <Image src={UniPostLogo} alt="" width={48} height={48} className="h-12 w-12" />
             </div>
-
-            <div className="space-y-8 text-lg/8 leading-relaxed opacity-90 max-w-3xl font-medium">
-              <p>
-                UniPost nació de un proyecto de título para la carrera de Ingeniería Informática en DuocUC, Chile.
-                El concepto nació de la necesidad percibida por uno de los diseñadores que ejerce como ilustrador independiente,
-                <span className="block mt-2 text-2xl font-extrabold text-slate-200/100 bg-white/10 px-4 py-2 rounded-xl -rotate-1"> ¿La necesidad? Alcance y exposición en redes sociales.</span>
-              </p>
-              <p>
-                Muchos rubros de la actualidad trabajan codo a codo con redes sociales, pero el consumo de tiempo que conlleva
-                es la razón por la que los Community Managers existen. Esta plataforma busca ser una herramienta para todos,
-                tanto emprendedores e independientes como empresas y Community Managers de compañías más grandes.
-              </p>
-              <p className="text-xl font-bold text-slate-200 pt-6 border-t-2 border-white/10">
-                Esperamos que esta herramienta cumpla con tus necesidades y a su vez, aliviane tu carga.
-              </p>
-            </div>
-
-            <div className="mt-12 text-base font-bold tracking-[0.2em] uppercase text-slate-200/60 bg-white/5 px-6 py-3 rounded-full border border-white/10">
-              - Equipo UniPost, 2025
-            </div>
+            <h2 className="text-3xl font-bold tracking-tight text-white">Sobre UniPost</h2>
           </div>
+          <div className="space-y-5 leading-relaxed text-slate-300">
+            <p>
+              UniPost nació como proyecto de título de Ingeniería en Informática en DuocUC, Chile. La idea surgió de la necesidad de uno de nuestros
+              diseñadores, ilustrador independiente: <strong className="text-white">lograr alcance y exposición en redes sociales</strong> sin que eso consuma todo su tiempo.
+            </p>
+            <p>
+              Muchos rubros trabajan codo a codo con redes sociales, y el tiempo que eso exige es la razón por la que existen los Community Managers.
+              UniPost busca ser una herramienta para todos: emprendedores, independientes, empresas y equipos de comunicación.
+            </p>
+            <p className="border-t border-white/10 pt-5 font-medium text-white">Esperamos que esta herramienta cumpla con tus necesidades y aliviane tu carga.</p>
+          </div>
+          <p className="mt-8 text-sm uppercase tracking-widest text-slate-500">— Equipo UniPost</p>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-white/10 bg-black/40 py-12">
-        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-8 px-6 md:flex-row">
-          <div className="flex items-center gap-3 opacity-80 hover:opacity-100 transition">
-            <Image src={UniPostLogo} alt="Logo" width={32} height={32} className="h-6 w-6 grayscale hover:grayscale-0 transition" />
-            <p className="text-sm">© 2025 UniPost. Desarrollado en Chile.</p>
+      <footer className="border-t border-white/10 bg-black/30 py-10">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-6 px-4 sm:px-6 md:flex-row">
+          <div className="flex items-center gap-3 text-sm text-slate-500">
+            <Image src={UniPostLogo} alt="" width={24} height={24} className="h-6 w-6 opacity-70" />
+            © {new Date().getFullYear()} UniPost · Desarrollado en Chile
           </div>
-          <nav className="flex items-center gap-8 text-sm font-bold tracking-wide opacity-80">
-            <a href="#feed" className="hover:text-slate-200 hover:underline transition underline-offset-4">Feed</a>
-            <a href="#features" className="hover:text-slate-200 hover:underline transition underline-offset-4">Características</a>
-            <a href="#about" className="hover:text-slate-200 hover:underline transition underline-offset-4">Sobre Nosotros</a>
+          <nav className="flex flex-wrap items-center justify-center gap-6 text-sm text-slate-400" aria-label="Pie de página">
+            {NAV.map((n) => <a key={n.href} href={n.href} className="hover:text-white">{n.label}</a>)}
+            <Link href="/term_cond" className="hover:text-white">Términos y condiciones</Link>
           </nav>
         </div>
       </footer>

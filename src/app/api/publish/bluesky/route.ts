@@ -1,4 +1,6 @@
-import { getServerSession } from "next-auth";
+import { getCurrentUser, unauthorized } from "@/lib/session";
+import { publishErrorResponse, runPublish } from "@/lib/publishing";
+import { readJson } from "@/lib/validation";
 import { prisma } from "@/lib/prisma";
 import { AtpAgent } from "@atproto/api";
 import { decryptBlueskySecret } from "@/lib/cryptoBluesky";
@@ -54,7 +56,7 @@ async function compressToSizeLimit(
   const lowerMime = (mime || "").toLowerCase();
   const usePng = lowerMime.includes("png");
 
-  let pipeline = sharp(input, { failOnError: false });
+  let pipeline = sharp(input, { failOn: "none" });
   const meta = await pipeline.metadata();
 
   const MAX_WIDTH = 2048;
@@ -220,14 +222,15 @@ export async function publishToBlueskyInternal(userId: number, postId: number, v
     }
 
     // 6. Crear el Post en Bluesky
+    const did = agent.session?.did;
+    if (!did) throw new Error("Bluesky login sin sesión");
     const response = await agent.com.atproto.repo.createRecord({
-      repo: agent.session?.did!,
+      repo: did,
       collection: "app.bsky.feed.post",
       record,
     });
 
-    console.log("Bluesky createRecord response:", response);
-
+    
     const uri = response.data.uri;
     const now = new Date();
     const dateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -249,30 +252,17 @@ export async function publishToBlueskyInternal(userId: number, postId: number, v
 
 // HANDLER POST (Para llamadas desde el navegador/frontend)
 export async function POST(req: Request) {
-  const session = await getServerSession();
-  if (!session)
-    return Response.json(
-      { ok: false, error: "Not authenticated" },
-      { status: 401 },
-    );
-
-  const { postId, variantId } = await req.json();
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { email: session.user?.email ?? "" },
-    });
-    if (!user) throw new Error("User not found");
-
-    // Llamamos a la función interna
-    const result = await publishToBlueskyInternal(user.id, postId, variantId);
-
-    return Response.json(result);
-  } catch (err: any) {
-    console.error("Bluesky publish error:", err);
-    return Response.json(
-      { ok: false, error: err.message },
-      { status: 400 },
+    const { postId, variantId } = await readJson<{ postId: number; variantId: number }>(req);
+    const result = await runPublish({ userId: user.id, postId, variantId, network: "BLUESKY" }, (ctx) =>
+      publishToBlueskyInternal(user.id, ctx.postId, ctx.variantId)
     );
+    return Response.json(result);
+  } catch (err) {
+    console.error("Bluesky publish error:", err);
+    return publishErrorResponse(err);
   }
 }

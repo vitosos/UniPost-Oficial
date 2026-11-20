@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveTargetUser } from "@/lib/session";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
@@ -6,8 +7,12 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  // Solo el propio usuario, un super admin o un Manager de su organización pueden ver estos datos.
+  const target = await resolveTargetUser(request);
+  if ("error" in target) return target.error;
+
   try {
-    const session = await getServerSession();
+    const session = await getServerSession(authOptions);
     if (!session || !session.user?.email) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
     // Obtenemos el usuario de la sesión (para validar permisos si quisieras)

@@ -1,62 +1,54 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import sharp from "sharp";
 import { prisma } from "@/lib/prisma";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { getCurrentUser, unauthorized } from "@/lib/session";
+import { IMAGE_TYPES, saveUpload, validateUpload } from "@/lib/uploads";
+
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 export async function PUT(request: Request) {
-  const session = await getServerSession();
-  if (!session?.user?.email) {
-    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
 
   try {
     const formData = await request.formData();
-    const name = formData.get("name") as string;
-    const file = formData.get("file") as File | null;
+    const rawName = formData.get("name");
+    const file = formData.get("file");
 
-    const updateData: any = {};
+    const updateData: { name?: string; image?: string } = {};
 
-    if (name && name.trim().length >= 2) {
+    if (typeof rawName === "string") {
+      const name = rawName.trim().slice(0, 60);
+      if (name.length < 2) {
+        return NextResponse.json({ ok: false, error: "El nombre debe tener al menos 2 caracteres." }, { status: 400 });
+      }
       updateData.name = name;
     }
 
-    // Procesar Imagen
-    if (file) {
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-
-      const filename = `avatar-${Date.now()}-${file.name.replace(/\s/g, "-")}`;
-      
-      // Definimos la ruta específica 'ProfilePics'
-      const uploadDir = path.join(process.cwd(), "public", "uploads", "ProfilePics");
-      
-      // Crear la carpeta recursivamente (si 'uploads' o 'ProfilePics' no existen, las crea)
-      await mkdir(uploadDir, { recursive: true });
-      
-      const filePath = path.join(uploadDir, filename);
-      await writeFile(filePath, buffer);
-
-      // Guardamos la ruta con la nueva carpeta en la BD
-      updateData.image = `/uploads/ProfilePics/${filename}`;
+    // Procesar imagen: se ignora el nombre de archivo del cliente, se valida el tipo
+    // y se re-codifica con sharp (elimina metadatos y cualquier contenido no-imagen).
+    if (file instanceof File && file.size > 0) {
+      if (file.size > MAX_AVATAR_BYTES || !(file.type in IMAGE_TYPES)) {
+        return NextResponse.json({ ok: false, error: "La imagen debe ser JPG, PNG, WEBP o GIF de hasta 5 MB." }, { status: 400 });
+      }
+      let original;
+      try {
+        original = validateUpload(Buffer.from(await file.arrayBuffer()), file.type);
+      } catch (e) {
+        return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 400 });
+      }
+      const resized = await sharp(original.buffer).rotate().resize(512, 512, { fit: "cover" }).webp({ quality: 85 }).toBuffer();
+      updateData.image = await saveUpload({ buffer: resized, mime: "image/webp", ext: "webp", isVideo: false }, "ProfilePics", "avatar-");
     }
 
-    if (Object.keys(updateData).length > 0) {
-      const updatedUser = await prisma.user.update({
-        where: { email: session.user.email },
-        data: updateData,
-      });
-      
-      return NextResponse.json({ 
-        ok: true, 
-        user: { name: updatedUser.name, image: updatedUser.image } 
-      });
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json({ ok: true, message: "No changes requested" });
     }
 
-    return NextResponse.json({ ok: true, message: "No changes requested" });
-
+    const updatedUser = await prisma.user.update({ where: { id: user.id }, data: updateData });
+    return NextResponse.json({ ok: true, user: { name: updatedUser.name, image: updatedUser.image } });
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ ok: false, error: "Error updating profile" }, { status: 500 });
+    console.error("profile update error:", error);
+    return NextResponse.json({ ok: false, error: "No se pudo actualizar el perfil." }, { status: 500 });
   }
 }

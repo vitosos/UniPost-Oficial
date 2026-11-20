@@ -54,7 +54,7 @@ export default function TermsContent() {
                         3. Restricciones de Contenido
                     </h2>
                     <p className="mb-4">
-                        UniPost promueve un entorno seguro. Está estrictamente prohibido publicar o marcar como "Visible" en el feed público contenido que incluya:
+                        UniPost promueve un entorno seguro. Está estrictamente prohibido publicar o marcar como “Visible” en el feed público contenido que incluya:
                     </p>
                     <ul className="list-disc pl-6 space-y-2 marker:text-orange-400">
                         <li><strong>Contenido NSFW:</strong> Material pornográfico, sexualmente explícito o desnudez no artística.</li>
@@ -116,7 +116,7 @@ export default function TermsContent() {
                         6. Propiedad Intelectual
                     </h2>
                     <p>
-                        Tú conservas todos los derechos y la propiedad intelectual de los contenidos (imágenes, videos, textos) que subas y publiques a través de UniPost. Al usar la función "Visible en Feed", nos otorgas una licencia no exclusiva para mostrar dicho contenido dentro de la plataforma UniPost con fines demostrativos y comunitarios.
+                        Tú conservas todos los derechos y la propiedad intelectual de los contenidos (imágenes, videos, textos) que subas y publiques a través de UniPost. Al usar la función “Visible en Feed”, nos otorgas una licencia no exclusiva para mostrar dicho contenido dentro de la plataforma UniPost con fines demostrativos y comunitarios.
                     </p>
                 </section>
 

@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { encrypt } from "@/lib/crypto";
+import { verifyOAuthState } from "@/lib/oauthState";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -26,6 +27,10 @@ export async function GET(req: NextRequest) {
 
   if (!code) {
     return NextResponse.redirect(new URL("/perfil?error=no_code", baseUrl));
+  }
+
+  if (!(await verifyOAuthState("tiktok", searchParams.get("state")))) {
+    return NextResponse.redirect(new URL("/perfil?error=invalid_state", baseUrl));
   }
 
   try {

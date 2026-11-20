@@ -1,31 +1,28 @@
+import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
 import MetricsDashboard from "@/components/MetricsDashboard";
 import { prisma } from "@/lib/prisma";
-import { notFound } from "next/navigation";
+import { canAccessUserData, getCurrentUser } from "@/lib/session";
+import { toPositiveInt } from "@/lib/validation";
 
-export default async function MemberMetricsPage({ 
-  params 
-}: { 
-  params: Promise<{ id: string }> 
-}) {
+export default async function MemberMetricsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const userId = Number(id);
+  const userId = toPositiveInt(id);
+  if (!userId) notFound();
 
-  if (isNaN(userId)) return notFound();
+  const requester = await getCurrentUser();
+  if (!requester) redirect("/login");
+  // Solo uno mismo, un Manager de la misma organización o un super admin.
+  if (!(await canAccessUserData(requester, userId))) notFound();
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { name: true }
-  });
-
-  if (!user) return notFound();
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+  if (!user) notFound();
 
   return (
     <div>
-      <div className="max-w-6xl mx-auto mb-6">
-        <a href="/equipos" className="text-sm text-white/60 hover:text-white transition">← Volver a Equipos</a>
+      <div className="mx-auto mb-4 max-w-6xl">
+        <Link href="/equipos" className="text-sm text-slate-400 transition hover:text-white">← Volver a Equipo</Link>
       </div>
-      
-      {/* Pasamos el userId para que el dashboard sepa a quién buscar */}
       <MetricsDashboard targetUserId={userId} userName={user.name || "Usuario"} />
     </div>
   );

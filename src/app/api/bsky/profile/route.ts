@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveTargetUser } from "@/lib/session";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 import { AtpAgent } from "@atproto/api";
@@ -26,6 +27,10 @@ async function saveAvatarLocally(url: string, userId: number, handle: string): P
 }
 
 export async function GET(req: NextRequest) {
+  // Solo el propio usuario, un super admin o un Manager de su organización pueden ver estos datos.
+  const target = await resolveTargetUser(req);
+  if ("error" in target) return target.error;
+
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
@@ -79,9 +84,9 @@ export async function GET(req: NextRequest) {
       password: decryptedPassword,
     });
 
-    const response = await agent.app.bsky.actor.getProfile({
-      actor: agent.session?.did!,
-    });
+    const did = agent.session?.did;
+    if (!did) throw new Error("Bluesky login sin sesión");
+    const response = await agent.app.bsky.actor.getProfile({ actor: did });
 
     const data = response.data;
     const remoteUrl = data.avatar;

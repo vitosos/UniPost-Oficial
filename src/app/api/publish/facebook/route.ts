@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "next-auth";
+import { getCurrentUser, unauthorized } from "@/lib/session";
+import { publishErrorResponse, runPublish } from "@/lib/publishing";
+import { readJson } from "@/lib/validation";
 import { decrypt } from "@/lib/crypto";
 
 // Helper para llamadas a Graph API
@@ -43,7 +45,7 @@ export async function publishToFacebookInternal(userId: number, postId: number, 
 
     // 4. Obtener ID y Token de la Página (Asumimos la primera página o la guardada)
     // Si guardaste el Page ID en la BD úsalo, si no, búscalo de nuevo:
-    const accountsRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?access_token=${userToken}`);
+    const accountsRes = await fetch("https://graph.facebook.com/v21.0/me/accounts", { headers: { Authorization: `Bearer ${userToken}` } });
     const accountsData = await accountsRes.json();
     const page = accountsData.data?.[0]; // Usamos la primera página encontrada
     if (!page) throw new Error("NO_FACEBOOK_PAGE_FOUND");
@@ -112,28 +114,21 @@ export async function publishToFacebookInternal(userId: number, postId: number, 
         data: { status: "PUBLISHED", uri: finalId, date_sent: new Date() }
     });
 
-    // Actualizar Post Padre si corresponde
-    if (post.status !== "PUBLISHED") {
-        await prisma.post.update({ where: { id: post.id }, data: { status: "PUBLISHED" } });
-    }
-
     return { ok: true, id: finalId };
 }
 
 export async function POST(req: Request) {
-    try {
-        const session = await getServerSession();
-        if (!session?.user?.email) return NextResponse.json({ ok: false, error: "Auth required" }, { status: 401 });
-        
-        const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-        if (!user) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
+    const user = await getCurrentUser();
+    if (!user) return unauthorized();
 
-        const { postId, variantId } = await req.json();
-        const result = await publishToFacebookInternal(user.id, postId, variantId);
-        
+    try {
+        const { postId, variantId } = await readJson<{ postId: number; variantId: number }>(req);
+        const result = await runPublish({ userId: user.id, postId, variantId, network: "FACEBOOK" }, (ctx) =>
+            publishToFacebookInternal(user.id, ctx.postId, ctx.variantId)
+        );
         return NextResponse.json(result);
-    } catch (err: any) {
+    } catch (err) {
         console.error("FB Publish Error:", err);
-        return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+        return publishErrorResponse(err);
     }
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveTargetUser } from "@/lib/session";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/prisma";
@@ -48,6 +49,10 @@ async function getInstagramAccountFromMeta(accessToken: string) {
 }
 
 export async function GET(req: NextRequest) {
+  // Solo el propio usuario, un super admin o un Manager de su organización pueden ver estos datos.
+  const target = await resolveTargetUser(req);
+  if ("error" in target) return target.error;
+
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 

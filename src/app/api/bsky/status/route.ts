@@ -1,10 +1,11 @@
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/prisma";
 
 // Checkeo rápido de estado de cuenta (enlazado o no)
 
 export async function GET() {
-  const session = await getServerSession();
+  const session = await getServerSession(authOptions);
   if (!session) {
     return Response.json({ ok: false, error: "Not authenticated" }, { status: 401 });
   }

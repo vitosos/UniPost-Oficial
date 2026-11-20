@@ -1,536 +1,374 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { useSession } from "next-auth/react";
-import toast from "react-hot-toast";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import UniPostLogo from "../../assets/UniPost.png";
-import BskyIcon from "@/app/assets/bsky.png";
-import IgIcon from "@/app/assets/ig.png";
-import FbIcon from "@/app/assets/fb.png";
-import TtIcon from "@/app/assets/tt.png";
-import XIcon from "@/app/assets/x.png";
+import toast from "react-hot-toast";
+import { NETWORKS, NETWORK_KEYS, isNetworkKey, networkLabel } from "@/lib/networks";
+import { Button, ButtonLink, Card, EmptyState, LoadingState, NetworkBadge, PageHeader, Pagination, StatusBadge, inputClass } from "@/components/ui";
 
-// TIPOS
-type Variant = {
-  id?: number;
-  network: string;
-  text: string;
-  status?: string;
-  uri?: string;
-  bskyUri?: string;
-};
-
-type Media = {
-  id: number;
-  url: string;
-  type: "IMAGE" | "VIDEO";
-  mime: string;
-  mediaLocation: string;
-};
-
-type Schedule = {
-  runAt: string;
-  timezone: string;
-};
-
+type Variant = { id: number; network: string; text: string; status: string; uri?: string | null; permalink?: string | null };
+type Media = { id: number; url: string; type: "IMAGE" | "VIDEO"; mime: string; mediaLocation: string };
 type Post = {
   id: number;
   title: string;
   body: string;
   status: string;
-  mediaBase64?: string;
+  category: string;
   variants: Variant[];
   medias: Media[];
-  schedule?: Schedule | null;
+  schedule?: { runAt: string; timezone: string } | null;
 };
 
-const ITEMS_PER_PAGE = 5;
-
-// Constantes para filtros
-const STATUS_OPTIONS = [
-  { label: "Todos los estados", value: "ALL" },
-  { label: "Borrador (Draft)", value: "DRAFT" },
-  { label: "Programado", value: "SCHEDULED" },
-  { label: "Publicado", value: "PUBLISHED" },
+const ITEMS_PER_PAGE = 8;
+const STATUS_TABS = [
+  { value: "ALL", label: "Todas" },
+  { value: "DRAFT", label: "Borradores" },
+  { value: "SCHEDULED", label: "Programadas" },
+  { value: "FAILED", label: "Con error" },
+  { value: "PUBLISHED", label: "Publicadas" },
 ];
 
-const NETWORK_OPTIONS = [
-  { label: "Todas las redes", value: "ALL" },
-  { label: "Instagram", value: "INSTAGRAM" },
-  { label: "Facebook", value: "FACEBOOK" },
-  { label: "Bluesky", value: "BLUESKY" },
-  { label: "TikTok", value: "TIKTOK" },
-  { label: "X (Twitter)", value: "TWITTER" },
-];
+function relativeSchedule(runAt: string) {
+  const target = new Date(runAt);
+  const diffMin = Math.round((target.getTime() - Date.now()) / 60000);
+  const when = target.toLocaleString("es-CL", { dateStyle: "medium", timeStyle: "short" });
+  if (diffMin <= 0) return { when, remaining: "procesando…" };
+  if (diffMin < 60) return { when, remaining: `en ${diffMin} min` };
+  if (diffMin < 60 * 24) return { when, remaining: `en ${Math.round(diffMin / 60)} h` };
+  return { when, remaining: `en ${Math.round(diffMin / 1440)} días` };
+}
 
 export default function PublicacionesPage() {
-  const { data: session } = useSession();
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
-  const [postMediaIndex, setPostMediaIndex] = useState<{ [postId: number]: number }>({});
-
-  const [processing, setProcessing] = useState<{ [key: number]: boolean }>({});
-  const [publishingAll, setPublishingAll] = useState<{ [postId: number]: boolean }>({});
-
-  // Estado para guardar cambios de texto (loading por variante)
-  const [savingVariant, setSavingVariant] = useState<{ [variantId: number]: boolean }>({});
-
-  // Estados de Filtros
-  const [searchTerm, setSearchTerm] = useState("");
+  const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [networkFilter, setNetworkFilter] = useState("ALL");
-
-  const [currentPage, setCurrentPage] = useState(1);
+  const [page, setPage] = useState(1);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [, setTick] = useState(0);
 
   useEffect(() => {
     fetchPosts();
-    const timer = setInterval(() => setTick(t => t + 1), 60000);
+    const timer = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(timer);
   }, []);
 
-  // Resetear página al cambiar cualquier filtro
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, statusFilter, networkFilter]);
+  useEffect(() => setPage(1), [search, statusFilter, networkFilter]);
 
   async function fetchPosts() {
-    setLoading(true);
     try {
       const res = await fetch("/api/posts");
       const json = await res.json();
       if (json.ok) setPosts(json.data);
-    } catch (error) {
-      console.error(error);
-      toast.error("Error cargando publicaciones");
+      else toast.error("No se pudieron cargar las publicaciones");
+    } catch {
+      toast.error("Error de conexión al cargar publicaciones");
     } finally {
       setLoading(false);
     }
   }
 
-  // --- LÓGICA DE GUARDADO DE VARIANTE ---
-  async function handleSaveVariantText(variantId: number, text: string) {
-    setSavingVariant(prev => ({ ...prev, [variantId]: true }));
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { ALL: posts.length };
+    for (const p of posts) c[p.status] = (c[p.status] ?? 0) + 1;
+    return c;
+  }, [posts]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return posts.filter(
+      (p) =>
+        (!q || p.title.toLowerCase().includes(q) || p.body.toLowerCase().includes(q)) &&
+        (statusFilter === "ALL" || p.status === statusFilter) &&
+        (networkFilter === "ALL" || p.variants.some((v) => v.network === networkFilter))
+    );
+  }, [posts, search, statusFilter, networkFilter]);
+
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const visiblePosts = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
+  const hasFilters = search || statusFilter !== "ALL" || networkFilter !== "ALL";
+
+  const updatePost = (id: number, fn: (p: Post) => Post) => setPosts((prev) => prev.map((p) => (p.id === id ? fn(p) : p)));
+  const removePost = (id: number) => setPosts((prev) => prev.filter((p) => p.id !== id));
+
+  return (
+    <div className="mx-auto max-w-5xl">
+      <PageHeader title="Publicaciones" description="Revisa, edita y publica tus borradores. Las programadas se publican solas." actions={<ButtonLink href="/composer">+ Crear publicación</ButtonLink>} />
+
+      {/* Pestañas de estado */}
+      <div className="mb-4 flex gap-1 overflow-x-auto rounded-xl border border-white/10 bg-white/[0.03] p-1" role="tablist" aria-label="Filtrar por estado">
+        {STATUS_TABS.map((t) => (
+          <button
+            key={t.value}
+            role="tab"
+            aria-selected={statusFilter === t.value}
+            onClick={() => setStatusFilter(t.value)}
+            className={`flex shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${statusFilter === t.value ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"}`}
+          >
+            {t.label}
+            <span className={`rounded-full px-1.5 text-[11px] ${t.value === "FAILED" && counts.FAILED ? "bg-red-500/20 text-red-200" : "bg-white/10 text-slate-400"}`}>{counts[t.value] ?? 0}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Búsqueda + red */}
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row">
+        <input type="search" placeholder="Buscar por título o texto…" value={search} onChange={(e) => setSearch(e.target.value)} className={`${inputClass} sm:flex-1`} aria-label="Buscar publicaciones" />
+        <select value={networkFilter} onChange={(e) => setNetworkFilter(e.target.value)} className={`${inputClass} sm:w-52`} aria-label="Filtrar por red">
+          <option value="ALL">Todas las redes</option>
+          {NETWORK_KEYS.map((n) => <option key={n} value={n}>{NETWORKS[n].label}</option>)}
+        </select>
+      </div>
+
+      {loading ? (
+        <LoadingState label="Cargando publicaciones..." />
+      ) : posts.length === 0 ? (
+        <EmptyState icon="📝" title="Aún no tienes publicaciones" description="Crea tu primera publicación y publícala en varias redes a la vez." action={<ButtonLink href="/composer">Crear publicación</ButtonLink>} />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon="🔍"
+          title="Sin resultados"
+          description="No hay publicaciones que coincidan con estos filtros."
+          action={hasFilters && <Button variant="secondary" onClick={() => { setSearch(""); setStatusFilter("ALL"); setNetworkFilter("ALL"); }}>Limpiar filtros</Button>}
+        />
+      ) : (
+        <ul className="space-y-3">
+          {visiblePosts.map((p) => (
+            <PostCard
+              key={p.id}
+              post={p}
+              expanded={expanded === p.id}
+              onToggle={() => setExpanded(expanded === p.id ? null : p.id)}
+              onChange={(fn) => updatePost(p.id, fn)}
+              onDeleted={() => removePost(p.id)}
+              onRefresh={fetchPosts}
+            />
+          ))}
+        </ul>
+      )}
+
+      <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+    </div>
+  );
+}
+
+function PostCard({ post, expanded, onToggle, onChange, onDeleted, onRefresh }: {
+  post: Post;
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: (fn: (p: Post) => Post) => void;
+  onDeleted: () => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [publishing, setPublishing] = useState<Record<number, boolean>>({});
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [mediaIndex, setMediaIndex] = useState(0);
+
+  const pending = post.variants.filter((v) => v.status !== "PUBLISHED");
+  const publishedCount = post.variants.length - pending.length;
+  const cover = post.medias[0];
+  const schedule = post.status === "SCHEDULED" && post.schedule ? relativeSchedule(post.schedule.runAt) : null;
+  const anyPublishing = Object.values(publishing).some(Boolean);
+
+  async function publishVariant(v: Variant): Promise<boolean> {
+    if (!isNetworkKey(v.network)) return false;
+    setPublishing((s) => ({ ...s, [v.id]: true }));
+    const toastId = toast.loading(`Publicando en ${networkLabel(v.network)}…`);
+    try {
+      const res = await fetch(NETWORKS[v.network].publishEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postId: post.id, variantId: v.id }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Error desconocido");
+      toast.success(`Publicado en ${networkLabel(v.network)}`, { id: toastId });
+      onChange((p) => ({ ...p, variants: p.variants.map((x) => (x.id === v.id ? { ...x, status: "PUBLISHED" } : x)) }));
+      return true;
+    } catch (err) {
+      toast.error(`${networkLabel(v.network)}: ${(err as Error).message}`, { id: toastId, duration: 6000 });
+      return false;
+    } finally {
+      setPublishing((s) => ({ ...s, [v.id]: false }));
+    }
+  }
+
+  async function publishAll() {
+    await Promise.all(pending.map(publishVariant));
+    await onRefresh();
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/posts?id=${post.id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!json.ok) throw new Error();
+      toast.success("Publicación eliminada");
+      onDeleted();
+    } catch {
+      toast.error("No se pudo eliminar");
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  }
+
+  return (
+    <li>
+      <Card className="overflow-hidden">
+        {/* Resumen */}
+        <div className="flex gap-4 p-4 sm:p-5">
+          <button type="button" onClick={onToggle} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/30 sm:h-24 sm:w-24" aria-label={expanded ? "Ocultar detalles" : "Ver detalles"}>
+            {cover ? (
+              cover.type === "VIDEO" ? (
+                <video src={cover.mediaLocation} className="h-full w-full object-cover" muted />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={cover.mediaLocation} alt="" className="h-full w-full object-cover" />
+              )
+            ) : (
+              <span className="flex h-full items-center justify-center text-2xl text-slate-600" aria-hidden="true">Aa</span>
+            )}
+            {post.medias.length > 1 && <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 text-[10px] text-white">+{post.medias.length - 1}</span>}
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-white" title={post.title}>{post.title}</h3>
+              <StatusBadge status={post.status} />
+            </div>
+            <p className="mt-1 line-clamp-2 text-sm text-slate-400">{post.body || <span className="italic text-slate-600">Sin texto principal</span>}</p>
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              {post.variants.map((v) => (
+                <span key={v.id} className="relative" title={`${networkLabel(v.network)}: ${v.status === "PUBLISHED" ? "publicado" : v.status === "FAILED" ? "con error" : "pendiente"}`}>
+                  <NetworkBadge network={v.network} withLabel={false} />
+                  {v.status === "PUBLISHED" && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-slate-900" />}
+                  {v.status === "FAILED" && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-400 ring-2 ring-slate-900" />}
+                </span>
+              ))}
+              <span className="text-xs text-slate-500">{publishedCount}/{post.variants.length} publicadas</span>
+              {schedule && <span className="text-xs text-amber-200">· 🕒 {schedule.when} ({schedule.remaining})</span>}
+            </div>
+          </div>
+
+          <div className="hidden shrink-0 flex-col items-end gap-2 sm:flex">
+            {pending.length > 0 && (
+              <Button size="sm" onClick={publishAll} loading={anyPublishing}>
+                {pending.length === post.variants.length ? "Publicar ahora" : `Publicar ${pending.length} pendiente${pending.length > 1 ? "s" : ""}`}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={onToggle} aria-expanded={expanded}>{expanded ? "Ocultar" : "Editar / detalles"}</Button>
+          </div>
+        </div>
+
+        {/* Acciones móviles */}
+        <div className="flex gap-2 border-t border-white/5 px-4 py-2 sm:hidden">
+          {pending.length > 0 && <Button size="sm" className="flex-1" onClick={publishAll} loading={anyPublishing}>Publicar ahora</Button>}
+          <Button size="sm" variant="secondary" className="flex-1" onClick={onToggle} aria-expanded={expanded}>{expanded ? "Ocultar" : "Detalles"}</Button>
+        </div>
+
+        {/* Detalle */}
+        {expanded && (
+          <div className="space-y-5 border-t border-white/10 bg-black/10 p-4 sm:p-5">
+            {post.medias.length > 0 && (
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex max-h-80 w-full justify-center overflow-hidden rounded-xl bg-black/40">
+                  {post.medias[mediaIndex].type === "VIDEO" ? (
+                    <video src={post.medias[mediaIndex].mediaLocation} controls className="max-h-80" />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={post.medias[mediaIndex].mediaLocation} alt={`Archivo ${mediaIndex + 1}`} className="max-h-80 object-contain" />
+                  )}
+                </div>
+                {post.medias.length > 1 && (
+                  <div className="flex items-center gap-3 text-xs text-slate-400">
+                    <Button size="sm" variant="ghost" onClick={() => setMediaIndex((i) => Math.max(0, i - 1))} disabled={mediaIndex === 0} aria-label="Anterior">←</Button>
+                    {mediaIndex + 1} / {post.medias.length}
+                    <Button size="sm" variant="ghost" onClick={() => setMediaIndex((i) => Math.min(post.medias.length - 1, i + 1))} disabled={mediaIndex === post.medias.length - 1} aria-label="Siguiente">→</Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {post.variants.map((v) => (
+                <VariantRow key={v.id} variant={v} fallbackText={post.body} publishing={!!publishing[v.id]} onPublish={() => publishVariant(v)} onSaved={(text) => onChange((p) => ({ ...p, variants: p.variants.map((x) => (x.id === v.id ? { ...x, text } : x)) }))} />
+              ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-white/5 pt-4">
+              {confirmDelete ? (
+                <>
+                  <span className="mr-auto text-sm text-red-200">¿Eliminar definitivamente? Esto no se puede deshacer.</span>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)}>Cancelar</Button>
+                  <Button size="sm" variant="danger" onClick={handleDelete} loading={deleting}>Sí, eliminar</Button>
+                </>
+              ) : (
+                <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>Eliminar publicación</Button>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+    </li>
+  );
+}
+
+function VariantRow({ variant, fallbackText, publishing, onPublish, onSaved }: { variant: Variant; fallbackText: string; publishing: boolean; onPublish: () => void; onSaved: (text: string) => void }) {
+  const [text, setText] = useState(variant.text);
+  const [saving, setSaving] = useState(false);
+  const dirty = text !== variant.text;
+  const isPublished = variant.status === "PUBLISHED";
+  const limit = isNetworkKey(variant.network) ? NETWORKS[variant.network].charLimit : 2200;
+  const effectiveLength = (text.trim() ? text : fallbackText).length;
+
+  async function save() {
+    setSaving(true);
     try {
       const res = await fetch("/api/posts", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variantId, text }),
+        body: JSON.stringify({ variantId: variant.id, text }),
       });
       const json = await res.json();
-
-      if (json.ok) {
-        toast.success("Cambios guardados");
-      } else {
-        throw new Error(json.error);
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error("Error al guardar cambios");
+      if (!json.ok) throw new Error();
+      toast.success("Cambios guardados");
+      onSaved(text);
+    } catch {
+      toast.error("No se pudieron guardar los cambios");
     } finally {
-      setSavingVariant(prev => ({ ...prev, [variantId]: false }));
+      setSaving(false);
     }
   }
 
-  async function handleDelete(id: number) {
-    if (!confirm("¿Seguro que deseas eliminar esta publicación?")) return;
-    const res = await fetch(`/api/posts?id=${id}`, { method: "DELETE" });
-    const json = await res.json();
-    if (json.ok) {
-      toast.success("🗑️ Publicación eliminada");
-      fetchPosts();
-    } else {
-      toast.error("❌ Error al eliminar");
-    }
-  }
-
-  async function handlePublishVariant(post: Post, variant: Variant) {
-    if (!variant.id) return;
-
-    setProcessing(prev => ({ ...prev, [variant.id!]: true }));
-    const toastId = toast.loading(`Publicando en ${variant.network}...`);
-
-    try {
-      let endpoint = "";
-      if (variant.network === "BLUESKY") endpoint = "/api/publish/bluesky";
-      else if (variant.network === "INSTAGRAM") endpoint = "/api/publish/instagram";
-      else if (variant.network === "FACEBOOK") endpoint = "/api/publish/facebook";
-      else if (variant.network === "TIKTOK") endpoint = "/api/publish/tiktok";
-      else if (variant.network === "TWITTER") endpoint = "/api/publish/x_twitter";
-      else throw new Error("Red no soportada");
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ postId: post.id, variantId: variant.id }),
-      });
-
-      const data = await res.json();
-
-      if (data.ok) {
-        toast.success(`Publicado en ${variant.network} ✅`, { id: toastId });
-        setPosts(prev => prev.map(p =>
-          p.id === post.id
-            ? { ...p, variants: p.variants.map(v => v.id === variant.id ? { ...v, status: "PUBLISHED" } : v) }
-            : p
-        ));
-      } else {
-        toast.error(`Error ${variant.network}: ${data.error}`, { id: toastId });
-      }
-    } catch (error: any) {
-      toast.error(`Error: ${error.message}`, { id: toastId });
-    } finally {
-      setProcessing(prev => ({ ...prev, [variant.id!]: false }));
-    }
-  }
-
-  async function handlePublishAll(post: Post) {
-    setPublishingAll(prev => ({ ...prev, [post.id]: true }));
-
-    const pendingVariants = post.variants.filter(v => v.status !== "PUBLISHED");
-    if (pendingVariants.length === 0) {
-      toast("No hay variantes pendientes para publicar.", { icon: "ℹ️" });
-      setPublishingAll(prev => ({ ...prev, [post.id]: false }));
-      return;
-    }
-
-    await Promise.all(pendingVariants.map(v => handlePublishVariant(post, v)));
-
-    setPublishingAll(prev => ({ ...prev, [post.id]: false }));
-  }
-
-  function getScheduleDisplay(runAt: string) {
-    const target = new Date(runAt);
-    const now = new Date();
-    const diffMs = target.getTime() - now.getTime();
-    const timeStr = target.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dateStr = target.toLocaleDateString();
-
-    if (diffMs <= 0) return { text: `${dateStr} ${timeStr}`, remaining: "Procesando..." };
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    let remaining = diffMins < 60 ? `Faltan ${diffMins} min` : `Faltan ${diffHours} hrs`;
-    return { text: `${dateStr} a las ${timeStr}`, remaining };
-  }
-
-  const handleExistingVariantTextChange = (postId: number, variantId: number | undefined, newText: string) => {
-    if (!variantId) return;
-    setPosts((prev) => prev.map((p) => p.id === postId ? { ...p, variants: p.variants.map((v) => v.id === variantId ? { ...v, text: newText } : v) } : p));
-  };
-
-  const movePostMedia = (postId: number, direction: "left" | "right", total: number) => {
-    setPostMediaIndex((prev) => {
-      const current = prev[postId] ?? 0;
-      let next = direction === "left" ? current - 1 : current + 1;
-      if (next < 0) next = 0;
-      if (next >= total) next = total - 1;
-      return { ...prev, [postId]: next };
-    });
-  };
-
-  function isVideoBase64(base64?: string) { return base64?.startsWith("data:video"); }
-
-  // --- LÓGICA DE FILTRADO MEMOIZADA ---
-  const filteredPosts = useMemo(() => {
-    return posts.filter(p => {
-      // 1. Filtro Texto
-      const matchText = p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.body.toLowerCase().includes(searchTerm.toLowerCase());
-
-      // 2. Filtro Estado
-      const matchStatus = statusFilter === "ALL" || p.status === statusFilter;
-
-      // 3. Filtro Red (Si el post tiene AL MENOS una variante de esa red)
-      const matchNetwork = networkFilter === "ALL" || p.variants.some(v => v.network === networkFilter);
-
-      return matchText && matchStatus && matchNetwork;
-    });
-  }, [posts, searchTerm, statusFilter, networkFilter]);
-
-  const totalPages = Math.ceil(filteredPosts.length / ITEMS_PER_PAGE);
-  const displayedPosts = filteredPosts.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const link = variant.permalink || null;
 
   return (
-    <div className="max-w-5xl mx-auto">
-
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <h1 className="text-3xl font-bold">📋 Biblioteca de Publicaciones</h1>
-        <div className="flex gap-4">
-          <a href="/composer" className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg font-bold transition">+ Crear Nueva</a>
-          <a href="/perfil" className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg transition">Cuentas Enlazadas</a>
-        </div>
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {isNetworkKey(variant.network) && <Image src={NETWORKS[variant.network].icon} alt="" width={18} height={18} className="h-[18px] w-[18px]" />}
+        <span className="text-sm font-semibold text-white">{networkLabel(variant.network)}</span>
+        <StatusBadge status={variant.status} />
+        {link && <a href={link} target="_blank" rel="noreferrer" className="text-xs text-indigo-300 hover:underline">Ver publicación ↗</a>}
+        {!isPublished && <span className={`ml-auto font-mono text-xs ${effectiveLength > limit ? "text-red-300" : "text-slate-500"}`}>{effectiveLength}/{limit}</span>}
       </div>
 
-      {/* BARRA DE FILTROS Y BÚSQUEDA */}
-      <div className="mb-8 p-4 bg-white/5 border border-white/10 rounded-2xl flex flex-col md:flex-row gap-4">
-        {/* Buscador */}
-        <div className="flex-1">
-          <input
-            type="text"
-            placeholder="🔍 Buscar por título o contenido..."
-            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500/50 transition h-full"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-
-        {/* Filtro Estado */}
-        <div className="md:w-48">
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 text-slate-200 focus:outline-none focus:border-purple-500/50 cursor-pointer"
-          >
-            {STATUS_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Filtro Red */}
-        <div className="md:w-48">
-          <select
-            value={networkFilter}
-            onChange={(e) => setNetworkFilter(e.target.value)}
-            className="w-full p-3 rounded-xl bg-black/20 border border-white/10 text-slate-200 focus:outline-none focus:border-purple-500/50 cursor-pointer"
-          >
-            {NETWORK_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {loading ? <p className="text-center animate-pulse">Cargando publicaciones...</p> : filteredPosts.length === 0 ? (
-        <div className="text-center py-20 bg-white/5 rounded-2xl border border-white/10">
-          <p className="text-xl text-slate-200/70">No se encontraron resultados con estos filtros.</p>
-          <button
-            onClick={() => { setSearchTerm(""); setStatusFilter("ALL"); setNetworkFilter("ALL"); }}
-            className="text-purple-300 underline mt-2 block w-full"
-          >
-            Limpiar filtros
-          </button>
-        </div>
+      {isPublished ? (
+        <p className="whitespace-pre-wrap text-sm text-slate-400">{variant.text || fallbackText}</p>
       ) : (
-        <div className="space-y-6">
-          {displayedPosts.map((p) => {
-            const mediaList = p.medias || [];
-            const totalMedia = mediaList.length;
-            const currentIndex = postMediaIndex[p.id] ?? 0;
-            const currentMedia = totalMedia > 0 ? mediaList[Math.min(Math.max(currentIndex, 0), totalMedia - 1)] : null;
-            const scheduleInfo = p.schedule ? getScheduleDisplay(p.schedule.runAt) : null;
-            const uniqueNetworks = Array.from(new Set(p.variants.map(v => v.network)));
-
-            return (
-              <div key={p.id} className="backdrop-blur-xl bg-white/5 border border-white/10 p-6 rounded-xl shadow-lg hover:border-white/20 transition">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
-
-                  {/* Título + Íconos de Redes */}
-                  <div className="flex items-center gap-3 overflow-hidden">
-                    <h3 className="text-xl font-bold truncate max-w-xs text-white" title={p.title}>
-                      {p.title}
-                    </h3>
-
-                    {/* Lista de Iconos */}
-                    <div className="flex -space-x-2 hover:space-x-1 transition-all duration-300 pl-2">
-                      {uniqueNetworks.map((net) => {
-                        let iconSrc = null;
-                        if (net === "BLUESKY") iconSrc = BskyIcon;
-                        if (net === "INSTAGRAM") iconSrc = IgIcon;
-                        if (net === "FACEBOOK") iconSrc = FbIcon;
-                        if (net === "TIKTOK") iconSrc = TtIcon;
-                        if (net === "TWITTER") iconSrc = XIcon;
-
-
-                        if (!iconSrc) return null;
-
-                        return (
-                          <div
-                            key={net}
-                            className="relative w-6 h-6 z-0 hover:z-10 hover:scale-125 transition-transform drop-shadow-md"
-                            title={net}
-                          >
-                            <Image src={iconSrc} alt={net} fill className="object-contain" />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 flex-wrap justify-end">
-                    {p.status === "SCHEDULED" && scheduleInfo && (
-                      <div className="text-right">
-                        <div className="text-yellow-300 text-sm font-bold flex items-center gap-1 justify-end">🕒 {scheduleInfo.text}</div>
-                        <div className="text-yellow-200/70 text-xs">({scheduleInfo.remaining})</div>
-                      </div>
-                    )}
-
-                    <span className={`text-sm px-3 py-1 rounded-full border ${p.status === "PUBLISHED" ? "bg-green-500/10 text-green-300 border-green-500/30" :
-                        p.status === "SCHEDULED" ? "bg-yellow-500/10 text-yellow-300 border-yellow-500/30" :
-                          "bg-gray-500/10 text-gray-300 border-gray-500/30"
-                      }`}>
-                      {p.status}
-                    </span>
-
-                    {/* 🚀 BOTÓN MAESTRO */}
-                    <button
-                      onClick={() => handlePublishAll(p)}
-                      disabled={publishingAll[p.id] || p.variants.every(v => v.status === "PUBLISHED")}
-                      className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:opacity-50 text-slate-200 px-4 py-1.5 rounded-lg font-bold text-sm shadow-md transition flex items-center gap-2"
-                    >
-                      {publishingAll[p.id] ? (
-                        <><span className="animate-spin">↻</span> Enviando...</>
-                      ) : (
-                        <>
-                          <Image src={UniPostLogo} alt="Logo" width={20} height={20} className="w-5 h-5 object-contain" />
-                          Enviar Todas
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                <p className="text-slate-300 mb-4 whitespace-pre-wrap">{p.body}</p>
-
-                {/* MEDIA VIEWER */}
-                {currentMedia && (
-                  <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-black/40 p-2 flex flex-col items-center">
-                    {currentMedia.type === "VIDEO" || currentMedia.mime.startsWith("video") ? (
-                      <video src={currentMedia.mediaLocation} controls className="max-h-[300px] rounded-lg object-contain" />
-                    ) : (
-                      <img src={currentMedia.mediaLocation} alt="media" className="max-h-[300px] w-auto rounded-lg object-contain" />
-                    )}
-                    {totalMedia > 1 && (
-                      <div className="flex items-center gap-3 mt-3">
-                        <button onClick={() => movePostMedia(p.id, "left", totalMedia)} disabled={currentIndex === 0} className="px-3 py-1 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20">◀</button>
-                        <span className="text-xs text-gray-400">{currentIndex + 1} / {totalMedia}</span>
-                        <button onClick={() => movePostMedia(p.id, "right", totalMedia)} disabled={currentIndex === totalMedia - 1} className="px-3 py-1 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20">▶</button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {!currentMedia && p.mediaBase64 && (
-                  <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-black/40 p-2 flex justify-center">
-                    {isVideoBase64(p.mediaBase64) ? (
-                      <video src={p.mediaBase64} controls className="max-h-[300px]" />
-                    ) : (
-                      <img src={p.mediaBase64} alt="media" className="max-h-[300px]" />
-                    )}
-                  </div>
-                )}
-
-                {/* VARIANTES */}
-                <div className="space-y-3 mt-6">
-                  {p.variants.map((v, i) => (
-                    <div key={i} className="flex flex-col md:flex-row gap-4 bg-black/20 border border-white/5 p-4 rounded-lg">
-                      <div className="flex-1 group">
-
-                        {/* Cabecera: Red + Estado */}
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="font-bold text-sm uppercase tracking-wider text-slate-300">{v.network}</span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded ${v.status === "PUBLISHED"
-                              ? "bg-green-500/20 text-green-200"
-                              : "bg-white/10 text-slate-400"
-                            }`}>
-                            {v.status || "DRAFT"}
-                          </span>
-                        </div>
-
-                        {/* Área de Texto + Botón Guardar */}
-                        {v.status !== "PUBLISHED" ? (
-                          <div>
-                            <textarea
-                              value={v.text}
-                              onChange={(e) => handleExistingVariantTextChange(p.id, v.id, e.target.value)}
-                              className="w-full text-sm text-slate-200 bg-black/40 border border-white/10 rounded p-3 resize-none focus:border-purple-500 outline-none transition placeholder-white/20 focus:bg-black/60"
-                              rows={3}
-                              placeholder="Escribe el contenido..."
-                            />
-
-                            {/* Botón Guardar (Fuera del textarea) */}
-                            {v.id && (
-                              <div className="flex justify-end mt-2">
-                                <button
-                                  onClick={() => handleSaveVariantText(v.id!, v.text)}
-                                  disabled={savingVariant[v.id!]}
-                                  className="text-xs flex items-center gap-2 bg-white/5 hover:bg-green-600/80 text-slate-400 hover:text-white px-3 py-1.5 rounded-md transition border border-white/10"
-                                  title="Guardar cambios de texto"
-                                >
-                                  {savingVariant[v.id!] ? (
-                                    <>Guardando... <span className="animate-spin">↻</span></>
-                                  ) : (
-                                    <>Guardar texto 💾</>
-                                  )}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-slate-400 italic p-2 border border-transparent">"{v.text}"</p>
-                        )}
-                      </div>
-
-                      {/* Botón Publicar (Columna Derecha) */}
-                      <div className="flex items-start pt-8 md:pt-0">
-                        <button
-                          onClick={() => handlePublishVariant(p, v)}
-                          disabled={v.status === "PUBLISHED" || processing[v.id!]}
-                          className={`px-4 py-2 rounded font-bold text-sm shadow-lg transition w-32 flex justify-center ${v.status === "PUBLISHED" ? "bg-gray-700 cursor-not-allowed opacity-50 text-slate-400" :
-                              v.network === "BLUESKY" ? "bg-sky-600 hover:bg-sky-500 text-white" :
-                                v.network === "INSTAGRAM" ? "bg-pink-600 hover:bg-pink-500 text-white" :
-                                  v.network === "FACEBOOK" ? "bg-blue-600 hover:bg-blue-500 text-white" :
-                                    v.network === "TIKTOK" ? "bg-black border border-cyan-500/30 hover:bg-gray-900 text-white" :
-                                      v.network === "TWITTER" ? "bg-black border border-white/20 hover:bg-neutral-800 text-white" :
-                                    
-                                      "bg-gray-500"
-                            }`}
-                        >
-                          {v.status === "PUBLISHED" ? "Publicado" :
-                            processing[v.id!] ? <span className="animate-spin">↻</span> : "Publicar"}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-4 flex justify-end border-t border-white/10 pt-4">
-                  <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-300 text-sm font-semibold transition flex items-center gap-1">
-                    🗑️ Eliminar publicación
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} className={`${inputClass} resize-y`} placeholder={fallbackText ? `Usa el texto principal: "${fallbackText.slice(0, 80)}${fallbackText.length > 80 ? "…" : ""}"` : "Escribe el texto…"} aria-label={`Texto para ${networkLabel(variant.network)}`} />
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            {dirty && <Button size="sm" variant="ghost" onClick={() => setText(variant.text)}>Descartar</Button>}
+            <Button size="sm" variant="secondary" onClick={save} loading={saving} disabled={!dirty}>{dirty ? "Guardar cambios" : "Guardado"}</Button>
+            <Button size="sm" onClick={onPublish} loading={publishing} disabled={dirty || effectiveLength > limit} title={dirty ? "Guarda los cambios antes de publicar" : undefined}>
+              {variant.status === "FAILED" ? "Reintentar" : "Publicar"}
+            </Button>
+          </div>
+        </>
       )}
-
-      {/* Paginación */}
-      {totalPages > 1 && (
-        <div className="mt-8 flex justify-center items-center gap-4">
-          <button
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-            className="px-4 py-2 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20 transition text-sm"
-          >
-            ◀ Anterior
-          </button>
-          <span className="text-sm text-slate-400">Página {currentPage} de {totalPages}</span>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-            disabled={currentPage === totalPages}
-            className="px-4 py-2 bg-white/10 rounded disabled:opacity-30 hover:bg-white/20 transition text-sm"
-          >
-            Siguiente ▶
-          </button>
-        </div>
-      )}
-
     </div>
   );
 }

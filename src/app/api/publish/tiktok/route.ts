@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getCurrentUser, unauthorized } from "@/lib/session";
+import { publishErrorResponse, runPublish } from "@/lib/publishing";
+import { readJson } from "@/lib/validation";
 import { decrypt } from "@/lib/crypto";
 
 // Helper para construir URL absoluta (TikTok necesita descargar el video desde tu servidor)
@@ -70,7 +71,7 @@ export async function publishToTikTokInternal(userId: number, postId: number, va
         }
     };
 
-    console.log("🎵 Enviando a TikTok:", { videoUrl, privacy: "SELF_ONLY" });
+    console.log("🎵 Enviando a TikTok:", { videoUrl });
 
     const res = await fetch(url, {
         method: "POST",
@@ -106,29 +107,22 @@ export async function publishToTikTokInternal(userId: number, postId: number, va
         }
     });
 
-    // Actualizar Post Padre si corresponde
-    if (post.status !== "PUBLISHED") {
-        await prisma.post.update({ where: { id: post.id }, data: { status: "PUBLISHED" } });
-    }
-
     return { ok: true, id: publishId };
 }
 
 // Handler para el Frontend (POST)
 export async function POST(req: Request) {
-    try {
-        const session = await getServerSession(authOptions);
-        if (!session?.user?.email) return NextResponse.json({ ok: false, error: "Auth required" }, { status: 401 });
-        
-        const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-        if (!user) return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
+    const user = await getCurrentUser();
+    if (!user) return unauthorized();
 
-        const { postId, variantId } = await req.json();
-        const result = await publishToTikTokInternal(user.id, postId, variantId);
-        
+    try {
+        const { postId, variantId } = await readJson<{ postId: number; variantId: number }>(req);
+        const result = await runPublish({ userId: user.id, postId, variantId, network: "TIKTOK" }, (ctx) =>
+            publishToTikTokInternal(user.id, ctx.postId, ctx.variantId)
+        );
         return NextResponse.json(result);
-    } catch (err: any) {
+    } catch (err) {
         console.error("TikTok Publish Handler Error:", err);
-        return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+        return publishErrorResponse(err);
     }
 }

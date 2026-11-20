@@ -1,60 +1,37 @@
 export const runtime = "nodejs";
 
 import fs from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "next-auth";
-// import { authOptions } from "@/lib/auth"; 
+import { getCurrentUser, unauthorized } from "@/lib/session";
+import { isNetworkKey } from "@/lib/networks";
+import { decodeDataUri, localUploadPath, saveUpload } from "@/lib/uploads";
+import { readJson, toPositiveInt } from "@/lib/validation";
 
-// 1. Limpiamos el tipo de Variante (ya no lleva category/visible)
-type VariantInput = {
-  network: string;
-  text: string;
-};
+const CATEGORIES = ["Ilustración", "Evento", "Emprendimiento", "Entretenimiento", "Otro"];
+const MAX_MEDIAS = 10;
 
-type MediaInput = {
-  base64: string;
-  type: "image" | "video";
-  order: number;
-};
+type VariantInput = { network: string; text: string };
+type MediaInput = { base64: string; type: "image" | "video"; order: number };
+type ScheduleInput = { runAt: string; timezone: string };
 
-type ScheduleInput = {
-  runAt: string;
-  timezone: string;
-};
-
-export async function GET(req: Request) {
+export async function GET() {
   try {
-    const session = await getServerSession();
-
-    if (!session || !session.user?.email) {
-      return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!user) {
-      return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
-    }
+    const user = await getCurrentUser();
+    if (!user) return unauthorized();
 
     const posts = await prisma.post.findMany({
       where: { authorId: user.id },
       orderBy: { id: "desc" },
       include: {
-        variants: true,
-        medias: true,
+        variants: { orderBy: { id: "asc" } },
+        medias: { orderBy: { mediaOrder: "asc" }, select: { id: true, url: true, type: true, mime: true, mediaLocation: true, mediaOrder: true } },
         schedule: true,
-        author: { select: { id: true, name: true, email: true } },
       },
     });
 
     return NextResponse.json({ ok: true, data: posts });
-  } catch (err: any) {
+  } catch (err) {
     console.error("❌ Error GET /api/posts:", err);
     return NextResponse.json({ ok: false, error: "LIST_FAILED" }, { status: 500 });
   }
@@ -62,137 +39,90 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession();
+    const user = await getCurrentUser();
+    if (!user) return unauthorized();
 
-    if (!session || !session.user?.email) {
-      return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-    });
-
-    if (!user) {
-      return NextResponse.json({ ok: false, error: "User not found" }, { status: 404 });
-    }
-
-    const body = await req.json();
-
-    // 2. Recibimos category y visible en el nivel superior
-    const {
-      organizationId,
-      title,
-      body: baseBody,
-      category,
-      visible,
-      variants,
-      medias,
-      mediaBase64,
-      schedule,
-    }: {
-      organizationId: number;
+    const body = await readJson<{
       title: string;
       body: string;
-      category?: string;
-      visible?: boolean;
+      category: string;
+      visible: boolean;
       variants: VariantInput[];
-      medias?: MediaInput[];
-      mediaBase64?: string | null;
-      schedule?: ScheduleInput | null;
-    } = body;
+      medias: MediaInput[];
+      schedule: ScheduleInput | null;
+    }>(req);
 
-    if (!title || !variants || variants.length === 0) {
+    const title = typeof body.title === "string" ? body.title.trim().slice(0, 200) : "";
+    const baseBody = typeof body.body === "string" ? body.body.slice(0, 70000) : "";
+    const category = typeof body.category === "string" && CATEGORIES.includes(body.category) ? body.category : "Otro";
+
+    const variants = (Array.isArray(body.variants) ? body.variants : [])
+      .filter((v): v is VariantInput => !!v && typeof v.network === "string" && isNetworkKey(v.network))
+      .map((v) => ({ network: v.network, text: typeof v.text === "string" ? v.text.slice(0, 70000) : "" }));
+    const uniqueNetworks = new Set(variants.map((v) => v.network));
+
+    if (!title || variants.length === 0 || uniqueNetworks.size !== variants.length) {
       return NextResponse.json({ ok: false, error: "MISSING_TITLE_OR_VARIANTS" }, { status: 400 });
     }
 
-    // Determinar estado inicial
+    let schedule: ScheduleInput | null = null;
+    if (body.schedule) {
+      const runAt = new Date(String(body.schedule.runAt));
+      if (Number.isNaN(runAt.getTime()) || runAt.getTime() <= Date.now()) {
+        return NextResponse.json({ ok: false, error: "INVALID_SCHEDULE" }, { status: 400 });
+      }
+      schedule = { runAt: runAt.toISOString(), timezone: String(body.schedule.timezone || "UTC").slice(0, 64) };
+    }
+
+    // Validar todos los archivos antes de crear nada en la BD.
+    const mediaInputs = (Array.isArray(body.medias) ? body.medias : []).slice(0, MAX_MEDIAS);
+    let decoded;
+    try {
+      decoded = mediaInputs
+        .filter((m) => typeof m?.base64 === "string")
+        .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
+        .map((m) => decodeDataUri(m.base64));
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 400 });
+    }
+
+    // La organización se toma del usuario, nunca del cliente.
+    const organizationId = user.organizationId ?? 1;
     const initialStatus = schedule ? "SCHEDULED" : "DRAFT";
 
-    // 3. Guardamos category y visible en el Post
     const created = await prisma.post.create({
       data: {
-        organizationId: organizationId || user.organizationId || 1,
+        organizationId,
         authorId: user.id,
         title,
-        body: baseBody || "",
-        category: category || "Otro",
-        visible: visible || false,
+        body: baseBody,
+        category,
+        visible: body.visible === true,
         status: initialStatus,
         mediaBase64: null,
-        
-        // Crear Variantes (ahora limpias de esos campos)
-        variants: {
-          create: variants.map((v) => ({
-            network: v.network,
-            text: v.text,
-            status: initialStatus,
-          })),
-        },
-
-        // Crear Agenda
-        schedule: schedule ? {
-            create: {
-                runAt: schedule.runAt,
-                timezone: schedule.timezone
-            }
-        } : undefined
+        variants: { create: variants.map((v) => ({ ...v, status: initialStatus })) },
+        schedule: schedule ? { create: schedule } : undefined,
       },
       include: { variants: true },
     });
 
-    // ---- Handle medias (Lógica original intacta) ----
-    const mediaInputs: MediaInput[] = Array.isArray(medias)
-      ? [...medias]
-      : mediaBase64
-        ? [{ base64: mediaBase64, type: "image", order: 0 }]
-        : [];
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL;
+    const base = appUrl ? (appUrl.startsWith("http") ? appUrl : `https://${appUrl}`).replace(/\/$/, "") : null;
 
-    mediaInputs.sort((a, b) => a.order - b.order);
-
-    for (let index = 0; index < mediaInputs.length; index++) {
-      const m = mediaInputs[index];
-      if (!m.base64 || !m.base64.startsWith("data:")) continue;
-
+    for (let index = 0; index < decoded.length; index++) {
+      const upload = decoded[index];
       try {
-        const [meta, dataPart] = m.base64.split(",");
-        const mimeMatch = meta.match(/data:(.*);base64/);
-        const inferredMime = mimeMatch?.[1];
-
-        const isVideo = m.type === "video" || inferredMime?.startsWith("video/");
-        const mime = inferredMime || (isVideo ? "video/mp4" : "image/jpeg");
-        const mediaType = isVideo ? "VIDEO" : "IMAGE";
-        const extFromMime = mime.split("/")[1] || (isVideo ? "mp4" : "jpg");
-        const ext = extFromMime.split(";")[0];
-
-        const buffer = Buffer.from(dataPart, "base64");
-
-        const uploadDir = path.join(process.cwd(), "public", "uploads");
-        await fs.mkdir(uploadDir, { recursive: true });
-
-        const filename = `${created.id}-${m.order ?? index}-${randomUUID()}.${ext}`;
-        const filePath = path.join(uploadDir, filename);
-
-        await fs.writeFile(filePath, buffer);
-
-        const relativeUrl = `/uploads/${filename}`;
-        let absoluteUrl: string | null = null;
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL;
-
-        if (appUrl) {
-          const base = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
-          absoluteUrl = `${base}${relativeUrl}`;
-        }
-
+        const relativeUrl = await saveUpload(upload, "", `${created.id}-${index}-`);
         await prisma.media.create({
           data: {
             postId: created.id,
-            mime,
-            type: mediaType,
-            size: buffer.length,
+            mime: upload.mime,
+            type: upload.isVideo ? "VIDEO" : "IMAGE",
+            size: upload.buffer.length,
             originalBase64: null,
-            url: absoluteUrl ?? relativeUrl,
+            url: base ? `${base}${relativeUrl}` : relativeUrl,
             mediaLocation: relativeUrl,
-            mediaOrder: typeof m.order === "number" ? m.order + 1 : index + 1,
+            mediaOrder: index + 1,
           },
         });
       } catch (err) {
@@ -200,28 +130,41 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json({ ok: true, data: created }, { status: 201 });
-  } catch (err: any) {
+    return NextResponse.json({ ok: true, data: { id: created.id } }, { status: 201 });
+  } catch (err) {
     console.error("❌ Error POST /api/posts:", err);
     return NextResponse.json({ ok: false, error: "CREATE_FAILED" }, { status: 500 });
   }
 }
 
-// DELETE (Intacto)
 export async function DELETE(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const idParam = searchParams.get("id");
-    if (!idParam) return NextResponse.json({ ok: false, error: "MISSING_ID" }, { status: 400 });
+    const user = await getCurrentUser();
+    if (!user) return unauthorized();
 
-    const id = Number(idParam);
-    if (Number.isNaN(id)) return NextResponse.json({ ok: false, error: "INVALID_ID" }, { status: 400 });
+    const id = toPositiveInt(new URL(req.url).searchParams.get("id"));
+    if (!id) return NextResponse.json({ ok: false, error: "INVALID_ID" }, { status: 400 });
+
+    const post = await prisma.post.findFirst({
+      where: { id, authorId: user.id },
+      select: { id: true, medias: { select: { mediaLocation: true } } },
+    });
+    if (!post) return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
 
     await prisma.$transaction([
+      prisma.metric.deleteMany({ where: { postId: id } }),
       prisma.media.deleteMany({ where: { postId: id } }),
       prisma.variant.deleteMany({ where: { postId: id } }),
       prisma.post.delete({ where: { id } }),
     ]);
+
+    // Limpieza de archivos (no bloquea si falla).
+    await Promise.all(
+      post.medias.map((m) => {
+        const file = localUploadPath(m.mediaLocation);
+        return file ? fs.unlink(file).catch(() => {}) : undefined;
+      })
+    );
 
     return NextResponse.json({ ok: true });
   } catch (err) {
@@ -232,39 +175,27 @@ export async function DELETE(req: Request) {
 
 export async function PUT(req: Request) {
   try {
-    const session = await getServerSession();
-    if (!session || !session.user?.email) {
-      return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
-    }
+    const user = await getCurrentUser();
+    if (!user) return unauthorized();
 
-    const body = await req.json();
-    const { variantId, text } = body;
-
-    if (!variantId || text === undefined) {
+    const body = await readJson<{ variantId: number; text: string }>(req);
+    const variantId = toPositiveInt(body.variantId);
+    if (!variantId || typeof body.text !== "string") {
       return NextResponse.json({ ok: false, error: "Missing data" }, { status: 400 });
     }
 
-    // Verificar que el usuario sea dueño del post (seguridad)
-    const variant = await prisma.variant.findUnique({
-      where: { id: variantId },
-      include: { post: true }
+    const variant = await prisma.variant.findFirst({
+      where: { id: variantId, post: { authorId: user.id } },
+      select: { id: true, status: true },
     });
-
-    const user = await prisma.user.findUnique({ where: { email: session.user.email } });
-
-    if (!variant || !user || variant.post.authorId !== user.id) {
-      return NextResponse.json({ ok: false, error: "Unauthorized or not found" }, { status: 403 });
+    if (!variant) return NextResponse.json({ ok: false, error: "NOT_FOUND" }, { status: 404 });
+    if (variant.status === "PUBLISHED") {
+      return NextResponse.json({ ok: false, error: "ALREADY_PUBLISHED" }, { status: 409 });
     }
 
-    // Actualizar texto
-    const updated = await prisma.variant.update({
-      where: { id: variantId },
-      data: { text },
-    });
-
+    const updated = await prisma.variant.update({ where: { id: variantId }, data: { text: body.text.slice(0, 70000) } });
     return NextResponse.json({ ok: true, data: updated });
-
-  } catch (err: any) {
+  } catch (err) {
     console.error("❌ Error PUT /api/posts:", err);
     return NextResponse.json({ ok: false, error: "UPDATE_FAILED" }, { status: 500 });
   }

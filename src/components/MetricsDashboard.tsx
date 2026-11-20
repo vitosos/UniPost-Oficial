@@ -1,21 +1,13 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
-} from "recharts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import Image from "next/image";
-import { calculateHashtagPerformance } from "@/utils/analytics";
 import toast from "react-hot-toast";
+import { calculateHashtagPerformance } from "@/utils/analytics";
+import { NETWORKS, NETWORK_KEYS, networkLabel, type NetworkKey } from "@/lib/networks";
+import { Avatar, Button, ButtonLink, Card, EmptyState, LoadingState, NetworkBadge, PageHeader, Pagination } from "@/components/ui";
 
-// Importación de Logos
-import BskyIcon from "@/app/assets/bsky.png";
-import IgIcon from "@/app/assets/ig.png";
-import FbIcon from "@/app/assets/fb.png";
-import TtIcon from "@/app/assets/tt.png";
-import XIcon from "@/app/assets/x.png"; // 👈 Importamos ícono X
-
-// --- TIPOS ---
 export type Metric = {
   id: number | string;
   network: string;
@@ -28,21 +20,39 @@ export type Metric = {
   post: { title: string; text?: string };
 };
 
-type BskyProfile = { avatar: string | null; displayName: string | null; handle: string; followers: number; posts: number; };
-type InstagramProfile = { username: string; name: string | null; profilePictureUrl: string | null; followers: number | null; follows: number | null; mediaCount: number | null; posts: number; };
-type FacebookProfile = { name: string; picture: { data: { url: string } }; followers_count: number; fan_count: number; };
-type TikTokProfile = { username: string; display_name: string; avatar_url: string; follower_count: number; likes_count: number; };
-// 👇 Nuevo Tipo X
-type XProfile = { username: string; name: string | null; avatar: string | null; followers: number; tweets: number; };
-
-type TabKey = "GENERAL" | "BLUESKY" | "INSTAGRAM" | "FACEBOOK" | "TIKTOK" | "TWITTER"; // 👈 Agregamos TWITTER
-
-type SortConfig = {
-  key: keyof Metric | "dateSent";
-  direction: "asc" | "desc";
+type ApiMetric = {
+  id: number;
+  network: string;
+  likes: number;
+  comments: number;
+  shares: number;
+  impressions: number | null;
+  collectedAt: string | null;
+  Variant?: { text?: string | null; date_sent?: string | null } | null;
+  post?: { title?: string | null; body?: string | null } | null;
 };
 
+type Profile = Record<string, unknown> & { picture?: { data?: { url?: string } } };
+type ProfileSummary = { avatar: string | null; name: string | null; handle: string | null; followers: number | null };
+
+const num = (v: unknown) => (typeof v === "number" ? v : null);
+const str = (v: unknown) => (typeof v === "string" ? v : null);
+const fmt = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString("es-CL"));
+
+// Endpoint de perfil y normalización por red.
+const PROFILE_SOURCES: Record<NetworkKey, { endpoint: string; normalize: (p: Profile) => ProfileSummary }> = {
+  INSTAGRAM: { endpoint: "/api/instagram/profile", normalize: (p) => ({ avatar: str(p.profilePictureUrl), name: str(p.name) ?? str(p.username), handle: str(p.username), followers: num(p.followers) }) },
+  FACEBOOK: { endpoint: "/api/facebook/profile", normalize: (p) => ({ avatar: p.picture?.data?.url ?? null, name: str(p.name), handle: null, followers: num(p.followers_count) }) },
+  TWITTER: { endpoint: "/api/x_twitter/profile", normalize: (p) => ({ avatar: str(p.avatar), name: str(p.name), handle: str(p.username), followers: num(p.followers) }) },
+  BLUESKY: { endpoint: "/api/bsky/profile", normalize: (p) => ({ avatar: str(p.avatar), name: str(p.displayName), handle: str(p.handle), followers: num(p.followers) }) },
+  TIKTOK: { endpoint: "/api/tiktok/profile", normalize: (p) => ({ avatar: str(p.avatar_url), name: str(p.display_name), handle: str(p.username), followers: num(p.follower_count) }) },
+};
+
+type TabKey = "GENERAL" | NetworkKey;
+type SortKey = "likes" | "comments" | "dateSent";
 const ITEMS_PER_PAGE = 10;
+
+const metricDate = (m: Metric) => m.variant?.date_sent || m.collectedAt;
 
 interface Props {
   targetUserId?: number;
@@ -50,52 +60,33 @@ interface Props {
 }
 
 export default function MetricsDashboard({ targetUserId, userName }: Props) {
-  // --- ESTADOS ---
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // Perfiles
-  const [bskyProfile, setBskyProfile] = useState<BskyProfile | null>(null);
-  const [igProfile, setIgProfile] = useState<InstagramProfile | null>(null);
-  const [fbProfile, setFbProfile] = useState<FacebookProfile | null>(null);
-  const [ttProfile, setTtProfile] = useState<TikTokProfile | null>(null);
-  const [xProfile, setXProfile] = useState<XProfile | null>(null); // 👈 Estado X
-
-  // UI
+  const [profiles, setProfiles] = useState<Partial<Record<NetworkKey, ProfileSummary | null>>>({});
   const [activeTab, setActiveTab] = useState<TabKey>("GENERAL");
   const [currentPage, setCurrentPage] = useState(1);
   const [syncing, setSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: "dateSent", direction: "desc" });
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "dateSent", dir: "desc" });
 
-  // Helper URL
-  const getApiUrl = (endpoint: string) => {
-    if (targetUserId) return `${endpoint}?userId=${targetUserId}`;
-    return endpoint;
-  };
+  const withUser = useCallback((endpoint: string) => (targetUserId ? `${endpoint}?userId=${targetUserId}` : endpoint), [targetUserId]);
 
-  // --- 1. CARGA DE PERFILES ---
   useEffect(() => {
-    fetch(getApiUrl("/api/bsky/profile")).then((r) => r.json()).then((d) => d.ok && setBskyProfile(d.profile)).catch(console.error);
-    fetch(getApiUrl("/api/instagram/profile")).then((r) => r.json()).then((d) => { if (d.ok && d.profile) setIgProfile({ ...d.profile, posts: d.profile.mediaCount || d.profile.posts || 0 }); }).catch(console.error);
-    fetch(getApiUrl("/api/facebook/profile")).then((r) => r.json()).then((d) => d.ok && setFbProfile(d.profile)).catch(console.error);
-    fetch(getApiUrl("/api/tiktok/profile")).then((r) => r.json()).then((d) => d.ok && setTtProfile(d.profile)).catch(console.error);
-    // 👇 Carga perfil X
-    fetch(getApiUrl("/api/x_twitter/profile")).then((r) => r.json()).then((d) => d.ok && setXProfile(d.profile)).catch(console.error);
-  }, [targetUserId]);
+    NETWORK_KEYS.forEach((key) => {
+      const src = PROFILE_SOURCES[key];
+      fetch(withUser(src.endpoint))
+        .then((r) => r.json())
+        .then((d) => setProfiles((p) => ({ ...p, [key]: d.ok && d.profile ? src.normalize(d.profile) : null })))
+        .catch(() => setProfiles((p) => ({ ...p, [key]: null })));
+    });
+  }, [withUser]);
 
-  // --- 2. CARGA DE MÉTRICAS ---
-  const loadMetrics = async () => {
+  const loadMetrics = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(getApiUrl("/api/metrics/list"));
-      const data = await res.json();
-
-      if (!data.ok) throw new Error(data.error || "Error cargando métricas.");
-
-      const mappedMetrics: Metric[] = data.metrics.map((m: any) => {
-        const realText = m.Variant?.text || m.post?.body || "";
-        return {
+      const data = await fetch(withUser("/api/metrics/list")).then((r) => r.json());
+      if (!data.ok) throw new Error();
+      setMetrics(
+        (data.metrics as ApiMetric[]).map((m) => ({
           id: m.id,
           network: m.network,
           likes: m.likes,
@@ -104,459 +95,254 @@ export default function MetricsDashboard({ targetUserId, userName }: Props) {
           impressions: m.impressions,
           collectedAt: m.collectedAt,
           variant: { date_sent: m.Variant?.date_sent || null },
-          post: {
-            title: m.post?.title || "(Sin título)",
-            text: realText,
-          },
-        };
-      });
-
-      setMetrics(mappedMetrics);
-    } catch (e: any) {
-      console.error(e);
-      toast.error("Error al cargar la lista de métricas");
+          post: { title: m.post?.title || "(Sin título)", text: m.Variant?.text || m.post?.body || "" },
+        }))
+      );
+    } catch {
+      toast.error("No se pudieron cargar las métricas");
     } finally {
       setLoading(false);
     }
-  };
+  }, [withUser]);
 
   useEffect(() => {
     loadMetrics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetUserId]);
+  }, [loadMetrics]);
 
-  // --- 3. ORDENAMIENTO ---
-  const handleSort = (key: SortConfig["key"]) => {
-    setSortConfig((current) => ({
-      key,
-      direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
-    }));
-  };
+  useEffect(() => setCurrentPage(1), [activeTab, sort]);
 
-  // --- 4. FILTRADO Y PROCESAMIENTO ---
-  
-  // A. Lista Filtrada y Ordenada
-  const processedMetrics = useMemo(() => {
-    // Filtrar por red
-    let filtered = activeTab === "GENERAL" ? metrics : metrics.filter((m) => m.network === activeTab);
+  const filtered = useMemo(() => (activeTab === "GENERAL" ? metrics : metrics.filter((m) => m.network === activeTab)), [metrics, activeTab]);
 
-    // Ordenar
-    return filtered.sort((a, b) => {
-      let valA: any;
-      let valB: any;
+  const sorted = useMemo(() => {
+    const value = (m: Metric) => (sort.key === "dateSent" ? new Date(metricDate(m) || 0).getTime() : m[sort.key]);
+    return [...filtered].sort((a, b) => (sort.dir === "asc" ? value(a) - value(b) : value(b) - value(a)));
+  }, [filtered, sort]);
 
-      if (sortConfig.key === "dateSent") {
-        valA = new Date(a.variant?.date_sent || a.collectedAt || 0).getTime();
-        valB = new Date(b.variant?.date_sent || b.collectedAt || 0).getTime();
-      } else {
-        valA = a[sortConfig.key as keyof Metric];
-        valB = b[sortConfig.key as keyof Metric];
-      }
-
-      if (valA < valB) return sortConfig.direction === "asc" ? -1 : 1;
-      if (valA > valB) return sortConfig.direction === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [metrics, activeTab, sortConfig]);
-
-  const hashtagStats = useMemo(() => {
-      return calculateHashtagPerformance(processedMetrics);
-  }, [processedMetrics]);
-
-
-  // Reset página al cambiar tab
-  useEffect(() => setCurrentPage(1), [activeTab]);
-
-  // Paginación
-  const totalPages = Math.ceil(processedMetrics.length / ITEMS_PER_PAGE);
-  const paginatedMetrics = processedMetrics.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
+  const totals = useMemo(
+    () => filtered.reduce((acc, m) => ({ likes: acc.likes + m.likes, comments: acc.comments + m.comments, shares: acc.shares + (m.shares || 0) }), { likes: 0, comments: 0, shares: 0 }),
+    [filtered]
   );
 
-  // Datos para el gráfico
+  const hashtagStats = useMemo(() => calculateHashtagPerformance(filtered).slice(0, 5), [filtered]);
+
   const chartData = useMemo(() => {
-    const data = Object.values(
-      processedMetrics.reduce((acc: any, m) => {
-        if (!acc[m.network])
-          acc[m.network] = { network: m.network, likes: 0, comments: 0 };
-        acc[m.network].likes += m.likes;
-        acc[m.network].comments += m.comments;
-        return acc;
-      }, {} as Record<string, any>)
-    );
-    return data.sort((a: any, b: any) => b.likes - a.likes);
-  }, [processedMetrics]);
+    const byNetwork = new Map<string, { network: string; likes: number; comments: number }>();
+    for (const m of filtered) {
+      const row = byNetwork.get(m.network) ?? { network: networkLabel(m.network), likes: 0, comments: 0 };
+      row.likes += m.likes;
+      row.comments += m.comments;
+      byNetwork.set(m.network, row);
+    }
+    return [...byNetwork.values()].sort((a, b) => b.likes - a.likes);
+  }, [filtered]);
 
-  // --- 5. ACCIONES DE USUARIO ---
-  const handleRefreshMetrics = async () => {
+  const totalPages = Math.ceil(sorted.length / ITEMS_PER_PAGE);
+  const pageRows = sorted.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  async function handleRefresh() {
+    setSyncing(true);
     try {
-      setSyncing(true);
-      setSyncMessage(null);
-
-      const payload = targetUserId ? { targetUserId } : {};
-
-      const res = await fetch("/api/metrics/refresh", { 
+      const res = await fetch("/api/metrics/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(targetUserId ? { targetUserId } : {}),
       });
-      
       const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || "Error al sincronizar");
-      
-      setSyncMessage(`✅ Completado. Procesados: ${data.processed}.`);
+      if (!res.ok || !data.ok) throw new Error(data.error || "No se pudo sincronizar");
+      toast.success(`Métricas actualizadas (${data.processed ?? 0} publicaciones)`);
       await loadMetrics();
-    } catch (e: any) {
-      setSyncMessage("❌ " + e.message);
-      toast.error(e.message);
+    } catch (e) {
+      toast.error((e as Error).message);
     } finally {
       setSyncing(false);
     }
+  }
+
+  const avgLikes = (network: NetworkKey) => {
+    const list = metrics.filter((m) => m.network === network);
+    return list.length ? (list.reduce((a, m) => a + m.likes, 0) / list.length).toFixed(1) : null;
   };
 
-  const getNetworkRatio = (network: string) => {
-    const netMetrics = metrics.filter((m) => m.network === network);
-    if (netMetrics.length === 0) return "0.0";
-    const totalLikes = netMetrics.reduce((acc, curr) => acc + curr.likes, 0);
-    return (totalLikes / netMetrics.length).toFixed(1);
-  };
-
-  const SortIcon = ({ colKey }: { colKey: SortConfig["key"] }) => {
-    if (sortConfig.key !== colKey)
-      return <span className="text-white/20 ml-1 text-xs">↕</span>;
-    return (
-      <span className="text-white ml-1 text-xs">
-        {sortConfig.direction === "asc" ? "↑" : "↓"}
-      </span>
-    );
-  };
+  const SortHeader = ({ k, label, align }: { k: SortKey; label: string; align: "center" | "right" }) => (
+    <th scope="col" className={`px-4 py-3 font-medium ${align === "center" ? "text-center" : "text-right"}`} aria-sort={sort.key === k ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className="inline-flex items-center gap-1 hover:text-white" onClick={() => setSort((s) => ({ key: k, dir: s.key === k && s.dir === "desc" ? "asc" : "desc" }))}>
+        {label}
+        <span aria-hidden="true" className={sort.key === k ? "text-slate-200" : "text-slate-600"}>{sort.key === k ? (sort.dir === "asc" ? "↑" : "↓") : "↕"}</span>
+      </button>
+    </th>
+  );
 
   return (
-    <div>
-      <h1 className="text-4xl md:text-5xl font-bold mb-12 text-center tracking-tight">
-        {userName ? `Métricas de ${userName}` : "Centro de Métricas Personales"}
-      </h1>
+    <div className="mx-auto max-w-6xl">
+      <PageHeader
+        title={userName ? `Métricas de ${userName}` : "Métricas"}
+        description="Interacciones de tus publicaciones en cada red. Actualiza para traer los datos más recientes."
+        actions={<Button onClick={handleRefresh} loading={syncing}>{syncing ? "Sincronizando…" : "Actualizar métricas"}</Button>}
+      />
 
-      {/* --- BOTÓN DE ACTUALIZAR (Siempre visible) --- */}
-      <div className="max-w-5xl mx-auto mb-16 flex flex-col md:flex-row items-center justify-center gap-6">
-        <button
-          onClick={handleRefreshMetrics}
-          disabled={syncing}
-          className={`px-8 py-3 rounded-full text-sm font-bold border transition flex items-center gap-3 shadow-xl transform hover:scale-105 active:scale-95 ${
-            syncing
-              ? "bg-white/10 border-white/20 text-white/50 cursor-wait"
-              : "bg-white text-indigo-900 border-transparent hover:bg-indigo-50"
-          }`}
-        >
-          {syncing ? (
-            <span className="animate-spin text-lg">↻</span>
-          ) : (
-            <span className="text-lg">🔄</span>
-          )}
-          {syncing ? "Sincronizando..." : targetUserId ? `Actualizar datos de ${userName}` : "Actualizar mis datos"}
-        </button>
-        {syncMessage && (
-          <span className="text-sm bg-black/40 px-4 py-2 rounded-lg border border-white/10 animate-in fade-in slide-in-from-bottom-2">
-            {syncMessage}
-          </span>
-        )}
-      </div>
-
-      {/* --- 1. TARJETAS DE PERFIL --- */}
-      {/* Cambiamos grid a 5 columnas en XL para que quepan todas, o auto-fit */}
-      <div className="max-w-[90rem] mx-auto mb-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-        
-        {/* Bluesky */}
-        <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
-          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
-            <Image src={BskyIcon} alt="logo" width={100} height={100} />
-          </div>
-          <div className="relative flex items-center gap-4 z-10">
-            {bskyProfile ? (
-              <>
-                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-sky-400 p-1">
-                  <img src={bskyProfile.avatar || ""} className="w-full h-full rounded-full object-cover bg-black/20" alt="Bluesky" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase text-sky-300 font-bold tracking-wider mb-1">Bluesky</p>
-                  <p className="font-bold text-lg leading-tight truncate">{bskyProfile.displayName}</p>
-                  <p className="text-xs opacity-60 truncate mb-2">@{bskyProfile.handle}</p>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-mono bg-black/20 px-2 py-1 rounded-lg">
-                    <span>👥 {bskyProfile.followers}</span>
-                    <span>📝 {bskyProfile.posts}</span>
-                    <span className="text-sky-200 font-bold">❤️ {getNetworkRatio("BLUESKY")} avg</span>
+      {/* Cuentas */}
+      <section aria-label="Cuentas conectadas" className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {NETWORK_KEYS.map((key) => {
+          const p = profiles[key];
+          const meta = NETWORKS[key];
+          return (
+            <Card key={key} className="flex items-center gap-3 p-4">
+              {p === undefined ? (
+                <div className="h-10 w-full animate-pulse rounded-lg bg-white/5" />
+              ) : p ? (
+                <>
+                  <div className="relative">
+                    <Avatar src={p.avatar} name={p.name} size={40} />
+                    <Image src={meta.icon} alt={meta.label} width={16} height={16} className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-slate-900" />
                   </div>
-                </div>
-              </>
-            ) : <div className="w-full text-center py-4 opacity-50 text-sm">Bluesky no conectado</div>}
-          </div>
-        </div>
-
-        {/* Instagram */}
-        <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
-          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
-            <Image src={IgIcon} alt="logo" width={100} height={100} />
-          </div>
-          <div className="relative flex items-center gap-4 z-10">
-            {igProfile ? (
-              <>
-                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-pink-500 p-1">
-                  <img src={igProfile.profilePictureUrl || ""} className="w-full h-full rounded-full object-cover bg-black/20" alt="Instagram" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase text-pink-300 font-bold tracking-wider mb-1">Instagram</p>
-                  <p className="font-bold text-lg leading-tight truncate">{igProfile.name}</p>
-                  <p className="text-xs opacity-60 truncate mb-2">@{igProfile.username}</p>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-mono bg-black/20 px-2 py-1 rounded-lg">
-                    <span>👥 {igProfile.followers}</span>
-                    <span>📝 {igProfile.posts}</span>
-                    <span className="text-pink-200 font-bold">❤️ {getNetworkRatio("INSTAGRAM")} avg</span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">{p.name || p.handle}</p>
+                    <p className="text-xs text-slate-400">
+                      {fmt(p.followers)} seguidores{avgLikes(key) && <> · {avgLikes(key)} ♥/post</>}
+                    </p>
                   </div>
-                </div>
-              </>
-            ) : <div className="w-full text-center py-4 opacity-50 text-sm">Instagram no conectado</div>}
-          </div>
-        </div>
-
-        {/* Facebook */}
-        <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
-          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
-            <Image src={FbIcon} alt="logo" width={100} height={100} />
-          </div>
-          <div className="relative flex items-center gap-4 z-10">
-            {fbProfile ? (
-              <>
-                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-blue-500 p-1">
-                  <img src={fbProfile.picture?.data?.url || ""} className="w-full h-full rounded-full object-cover bg-black/20" alt="Facebook" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase text-blue-300 font-bold tracking-wider mb-1">Facebook</p>
-                  <p className="font-bold text-lg leading-tight truncate">{fbProfile.name}</p>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-mono bg-black/20 px-2 py-1 rounded-lg mt-2">
-                    <span>👥 {fbProfile.followers_count}</span>
-                    <span>👍 {fbProfile.fan_count}</span>
-                    <span className="text-blue-200 font-bold">❤️ {getNetworkRatio("FACEBOOK")} avg</span>
+                </>
+              ) : (
+                <>
+                  <Image src={meta.icon} alt="" width={28} height={28} className="h-7 w-7 opacity-50" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-300">{meta.label}</p>
+                    <p className="text-xs text-slate-500">No conectada</p>
                   </div>
-                </div>
-              </>
-            ) : <div className="w-full text-center py-4 opacity-50 text-sm">Facebook no conectado</div>}
-          </div>
-        </div>
+                </>
+              )}
+            </Card>
+          );
+        })}
+      </section>
 
-        {/* TikTok */}
-        <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
-          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
-            <Image src={TtIcon} alt="logo" width={100} height={100} />
-          </div>
-          <div className="relative flex items-center gap-4 z-10">
-            {ttProfile ? (
-              <>
-                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-cyan-400 p-1">
-                  <img src={ttProfile.avatar_url || ""} className="w-full h-full rounded-full object-cover bg-black/20" alt="TikTok" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase text-cyan-300 font-bold tracking-wider mb-1">TikTok</p>
-                  <p className="font-bold text-lg leading-tight truncate">{ttProfile.display_name}</p>
-                  <p className="text-xs opacity-60 truncate mb-2">@{ttProfile.username}</p>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-mono bg-black/20 px-2 py-1 rounded-lg">
-                    <span>👥 {ttProfile.follower_count}</span>
-                    <span className="text-cyan-200 font-bold">❤️ {getNetworkRatio("TIKTOK")} avg</span>
-                  </div>
-                </div>
-              </>
-            ) : <div className="w-full text-center py-4 opacity-50 text-sm">TikTok no conectado</div>}
-          </div>
-        </div>
-
-        {/* 🆕 X (TWITTER) */}
-        <div className="relative bg-white/5 border border-white/10 p-6 rounded-3xl shadow-xl backdrop-blur-sm overflow-hidden group hover:bg-white/10 transition duration-300">
-          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none group-hover:opacity-20 transition transform group-hover:scale-110">
-            <Image src={XIcon} alt="logo" width={100} height={100} />
-          </div>
-          <div className="relative flex items-center gap-4 z-10">
-            {xProfile ? (
-              <>
-                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-white/30 p-1 bg-black">
-                  <img src={xProfile.avatar || ""} className="w-full h-full rounded-full object-cover bg-black/20" alt="X" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase text-slate-300 font-bold tracking-wider mb-1">X (Twitter)</p>
-                  <p className="font-bold text-lg leading-tight truncate">{xProfile.name}</p>
-                  <p className="text-xs opacity-60 truncate mb-2">@{xProfile.username}</p>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-mono bg-black/20 px-2 py-1 rounded-lg">
-                    <span>👥 {xProfile.followers}</span>
-                    <span>📝 {xProfile.tweets}</span>
-                    <span className="text-slate-200 font-bold">❤️ {getNetworkRatio("TWITTER")} avg</span>
-                  </div>
-                </div>
-              </>
-            ) : <div className="w-full text-center py-4 opacity-50 text-sm">X no conectado</div>}
-          </div>
-        </div>
-
-      </div>
-
-      {/* --- 2. ANALÍTICA DE HASHTAGS --- */}
-      {hashtagStats.length > 0 && (
-        <div className="max-w-7xl mx-auto mb-16">
-          <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
-            #️⃣ Top Hashtags{" "}
-            <span className="text-xs bg-white/10 px-3 py-1 rounded-full font-normal border border-white/10 tracking-wide">
-              {activeTab === "GENERAL" ? "Global" : activeTab}
-            </span>
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-5">
-            {hashtagStats.slice(0, 5).map((tag, idx) => (
-              <div key={idx} className="bg-black/20 border border-white/10 p-5 rounded-2xl hover:bg-white/5 transition hover:-translate-y-1 duration-300 flex flex-col justify-between h-full relative overflow-hidden">
-                <div className="absolute -right-2 -top-2 font-black text-6xl opacity-5 select-none">#</div>
-                <p className="text-indigo-300 font-bold truncate text-lg mb-2 z-10" title={tag.tag}>#{tag.tag.replace("#", "")}</p>
-                
-                <div className="flex items-center gap-2 mb-3 z-10">
-                  <span className="text-xs font-bold bg-green-500/20 text-green-300 px-2 py-0.5 rounded border border-green-500/30">⚡ {tag.efficiency.toFixed(1)}</span>
-                  <span className="text-[10px] opacity-50">avg. likes</span>
-                </div>
-
-                <div className="flex justify-between items-end text-sm border-t border-white/10 pt-3 z-10">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] opacity-50 uppercase font-bold tracking-wider">Total</span>
-                    <span className="font-mono text-pink-200 text-xs">❤️ {tag.totalLikes}</span>
-                    <span className="font-mono text-blue-200 text-xs">💬 {tag.totalComments}</span>
-                  </div>
-                  <div className="flex flex-col items-end">
-                    <span className="text-xs bg-white/10 px-2 py-1 rounded font-mono">{tag.postsCount} posts</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* --- TABS --- */}
-      <div className="max-w-6xl mx-auto mb-8 flex flex-wrap justify-center gap-4">
-        {(["GENERAL", "BLUESKY", "INSTAGRAM", "FACEBOOK", "TIKTOK", "TWITTER"] as TabKey[]).map((tab) => (
+      {/* Filtro por red */}
+      <div className="mb-6 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Filtrar por red">
+        {(["GENERAL", ...NETWORK_KEYS] as TabKey[]).map((tab) => {
+          const active = activeTab === tab;
+          return (
             <button
               key={tab}
+              role="tab"
+              aria-selected={active}
               onClick={() => setActiveTab(tab)}
-              className={`px-8 py-2.5 rounded-full text-sm font-bold border transition duration-300 ${
-                activeTab === tab
-                  ? "bg-white text-indigo-900 border-white shadow-glow transform scale-105"
-                  : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white"
-              }`}
+              className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-medium transition ${active ? "border-indigo-400/60 bg-indigo-500/20 text-white" : "border-white/10 bg-white/5 text-slate-400 hover:text-white"}`}
             >
-              {tab === "GENERAL" ? "General" : tab === "TWITTER" ? "X (Twitter)" : tab.charAt(0) + tab.slice(1).toLowerCase()}
+              {tab !== "GENERAL" && <Image src={NETWORKS[tab].icon} alt="" width={14} height={14} className="h-3.5 w-3.5" />}
+              {tab === "GENERAL" ? "Todas" : NETWORKS[tab].label}
             </button>
-        ))}
+          );
+        })}
       </div>
 
-      {/* --- CONTENIDO --- */}
       {loading ? (
-        <div className="text-center py-32 animate-pulse opacity-50">Cargando datos...</div>
-      ) : metrics.length === 0 ? (
-        <div className="text-center py-32 bg-white/5 rounded-3xl border border-white/10 max-w-4xl mx-auto border-dashed">
-          <p className="text-xl opacity-70">No hay datos disponibles.</p>
-        </div>
+        <LoadingState label="Cargando métricas..." />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon="📊"
+          title={metrics.length === 0 ? "Aún no hay métricas" : "Sin datos para esta red"}
+          description={metrics.length === 0 ? "Publica en tus redes y luego presiona “Actualizar métricas” para ver cómo les va." : "Prueba con otra red o actualiza las métricas."}
+          action={!targetUserId && metrics.length === 0 ? <ButtonLink href="/composer">Crear publicación</ButtonLink> : undefined}
+        />
       ) : (
-        <div className="max-w-7xl mx-auto space-y-16">
-          
-          {/* 3. TABLA DETALLADA */}
-          <div className="overflow-hidden backdrop-blur-xl bg-white/5 border border-white/10 rounded-3xl shadow-xl">
-            <div className="p-8 border-b border-white/10 flex justify-between items-center bg-white/5">
-                <h2 className="text-2xl font-bold">📋 Publicaciones Recientes</h2>
-                <span className="text-xs text-slate-200/40 uppercase font-bold tracking-wider">Mostrando {paginatedMetrics.length} registros</span>
-            </div>
+        <div className="space-y-8">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <SummaryStat label="Publicaciones medidas" value={filtered.length} />
+            <SummaryStat label="Me gusta" value={totals.likes} />
+            <SummaryStat label="Comentarios" value={totals.comments} />
+            <SummaryStat label="Compartidos" value={totals.shares} />
+          </div>
 
+          <div className="grid gap-6 lg:grid-cols-5">
+            <Card className="p-5 lg:col-span-3">
+              <h2 className="mb-4 font-semibold text-white">Interacciones por red</h2>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                    <XAxis dataKey="network" stroke="#94a3b8" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                    <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip cursor={{ fill: "#ffffff08" }} contentStyle={{ backgroundColor: "#0f172a", borderRadius: 12, border: "1px solid #ffffff20", color: "#fff" }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+                    <Bar dataKey="likes" name="Me gusta" fill="#f472b6" radius={[6, 6, 0, 0]} maxBarSize={44} />
+                    <Bar dataKey="comments" name="Comentarios" fill="#818cf8" radius={[6, 6, 0, 0]} maxBarSize={44} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+
+            <Card className="p-5 lg:col-span-2">
+              <h2 className="mb-1 font-semibold text-white">Hashtags con más interacción</h2>
+              <p className="mb-4 text-xs text-slate-500">Promedio de me gusta + comentarios por publicación.</p>
+              {hashtagStats.length === 0 ? (
+                <p className="py-8 text-center text-sm text-slate-400">Tus publicaciones aún no usan hashtags.</p>
+              ) : (
+                <ol className="space-y-2">
+                  {hashtagStats.map((tag, i) => (
+                    <li key={tag.tag} className="flex items-center gap-3 rounded-xl border border-white/5 bg-black/20 px-3 py-2">
+                      <span className="w-4 text-xs text-slate-500">{i + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-indigo-200" title={tag.tag}>{tag.tag}</span>
+                      <span className="text-xs text-slate-400">{tag.postsCount} posts</span>
+                      <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-200">{tag.efficiency.toFixed(1)}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </Card>
+          </div>
+
+          <Card className="p-0">
+            <div className="flex items-center justify-between border-b border-white/10 p-5">
+              <h2 className="font-semibold text-white">Detalle por publicación</h2>
+              <span className="text-xs text-slate-500">{sorted.length} registros</span>
+            </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-slate-200/90">
-                <thead>
-                  <tr className="bg-black/20 text-slate-200/50 uppercase text-xs tracking-wider font-bold cursor-pointer select-none">
-                    <th className="py-5 px-8">Red Social</th>
-                    <th className="py-5 px-8 w-1/3">Contenido</th>
-                    <th className="py-5 px-8 text-center hover:text-slate-200 transition" onClick={() => handleSort("likes")}>
-                      Likes <SortIcon colKey="likes" />
-                    </th>
-                    <th className="py-5 px-8 text-center hover:text-slate-200 transition" onClick={() => handleSort("comments")}>
-                      Comentarios <SortIcon colKey="comments" />
-                    </th>
-                    <th className="py-5 px-8 text-right hover:text-slate-200 transition" onClick={() => handleSort("dateSent")}>
-                      Fecha Publicación <SortIcon colKey="dateSent" />
-                    </th>
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-slate-400">
+                  <tr className="border-b border-white/10">
+                    <th scope="col" className="px-4 py-3 font-medium">Red</th>
+                    <th scope="col" className="px-4 py-3 font-medium">Publicación</th>
+                    <SortHeader k="likes" label="Me gusta" align="center" />
+                    <SortHeader k="comments" label="Comentarios" align="center" />
+                    <SortHeader k="dateSent" label="Fecha" align="right" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {paginatedMetrics.map((m) => (
-                    <tr key={m.id} className="hover:bg-white/5 transition-colors group">
-                      <td className="py-5 px-8">
-                        <span className={`text-[11px] font-extrabold px-3 py-1.5 rounded-lg tracking-wide shadow-sm ${
-                            m.network === "BLUESKY" ? "bg-sky-500/20 text-sky-300 border border-sky-500/30" :
-                            m.network === "INSTAGRAM" ? "bg-pink-500/20 text-pink-300 border border-pink-500/30" :
-                            m.network === "FACEBOOK" ? "bg-blue-600/20 text-blue-300 border border-blue-500/30" :
-                            m.network === "TIKTOK" ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" :
-                            m.network === "TWITTER" ? "bg-black text-white border border-white/20" : // 👈 Estilo TWITTER
-                            "bg-gray-700 text-gray-300"
-                        }`}>
-                            {m.network}
-                        </span>
-                      </td>
-                      <td className="py-5 px-8">
-                        <p className="font-bold truncate text-slate-200 group-hover:text-indigo-200 transition">
-                          {m.post.title}
-                        </p>
-                        <p className="text-xs opacity-50 line-clamp-1 mt-1">
-                          {m.post.text}
-                        </p>
-                      </td>
-                      <td className="py-5 px-8 text-center font-mono text-pink-200 font-bold text-base">
-                        {m.likes}
-                      </td>
-                      <td className="py-5 px-8 text-center font-mono text-indigo-200 font-bold text-base">
-                        {m.comments}
-                      </td>
-                      <td className="py-5 px-8 text-right text-xs opacity-40 font-mono">
-                        {m.variant?.date_sent || m.collectedAt
-                          ? new Date(m.variant?.date_sent || m.collectedAt!).toLocaleDateString("es-CL", {
-                              day: "2-digit", month: "short", year: "numeric",
-                            })
-                          : "-"}
-                      </td>
-                    </tr>
-                  ))}
+                  {pageRows.map((m) => {
+                    const date = metricDate(m);
+                    return (
+                      <tr key={m.id} className="transition hover:bg-white/[0.03]">
+                        <td className="px-4 py-3"><NetworkBadge network={m.network} /></td>
+                        <td className="max-w-xs px-4 py-3">
+                          <p className="truncate font-medium text-slate-100">{m.post.title}</p>
+                          {m.post.text && <p className="mt-0.5 truncate text-xs text-slate-500">{m.post.text}</p>}
+                        </td>
+                        <td className="px-4 py-3 text-center tabular-nums">{fmt(m.likes)}</td>
+                        <td className="px-4 py-3 text-center tabular-nums">{fmt(m.comments)}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-xs text-slate-400">
+                          {date ? new Date(date).toLocaleDateString("es-CL", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-
-            {/* Paginador */}
-            {totalPages > 1 && (
-              <div className="p-6 border-t border-white/10 flex justify-center items-center gap-6 bg-black/20">
-                <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="text-sm px-5 py-2 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent transition font-medium border border-white/10">◀ Anterior</button>
-                <span className="text-sm font-mono text-slate-200/60 bg-black/30 px-4 py-1 rounded-full border border-white/5">Página {currentPage} / {totalPages}</span>
-                <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="text-sm px-5 py-2 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent transition font-medium border border-white/10">Siguiente ▶</button>
-              </div>
-            )}
-          </div>
-
-          {/* 4. GRÁFICO */}
-          <div className="backdrop-blur-xl bg-white/5 border border-white/10 p-8 rounded-3xl shadow-xl h-[450px]">
-            <h3 className="text-xl font-bold mb-6 text-center opacity-90">
-              Comparativa de Interacciones
-            </h3>
-            <div style={{ width: "100%", height: 400 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
-                  <XAxis dataKey="network" stroke="#ffffff80" tick={{ fontSize: 12, fontWeight: 600 }} axisLine={false} tickLine={false} dy={10} />
-                  <YAxis stroke="#ffffff80" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <Tooltip cursor={{ fill: "#ffffff10" }} contentStyle={{ backgroundColor: "#0f172a", borderRadius: "12px", border: "1px solid #ffffff20", color: "#fff", padding: "12px" }} />
-                  <Legend wrapperStyle={{ paddingTop: "20px" }} iconType="circle" />
-                  <Bar dataKey="likes" name="Likes" fill="#f472b6" radius={[6, 6, 0, 0]} barSize={50} />
-                  <Bar dataKey="comments" name="Comentarios" fill="#818cf8" radius={[6, 6, 0, 0]} barSize={50} />
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="pb-5">
+              <Pagination page={currentPage} totalPages={totalPages} onChange={setCurrentPage} />
             </div>
-          </div>
+          </Card>
         </div>
       )}
     </div>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: number }) {
+  return (
+    <Card className="p-4">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="mt-1 text-2xl font-bold text-white tabular-nums">{fmt(value)}</p>
+    </Card>
   );
 }

@@ -3,6 +3,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth"; // O tu path a auth
 import { prisma } from "@/lib/prisma";
+import { attachOAuthState, newOAuthState } from "@/lib/oauthState";
 
 const FB_VERSION = process.env.FACEBOOK_API_VERSION ?? "v21.0";
 // Puedes usar las mismas credenciales si es la misma App en Meta
@@ -26,7 +27,8 @@ export async function GET() {
     return NextResponse.redirect(signInUrl.toString());
   }
 
-  const state = encodeURIComponent(String(user.id));
+  // "state" aleatorio (anti-CSRF), verificado en el callback contra una cookie httpOnly
+  const state = newOAuthState();
 
   const url = new URL(`https://www.facebook.com/${FB_VERSION}/dialog/oauth`);
   url.searchParams.set("client_id", FACEBOOK_APP_ID);
@@ -45,5 +47,7 @@ export async function GET() {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("state", state);
 
-  return NextResponse.redirect(url.toString());
+  const res = NextResponse.redirect(url.toString());
+  attachOAuthState(res, "facebook", state);
+  return res;
 }

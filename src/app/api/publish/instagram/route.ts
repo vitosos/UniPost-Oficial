@@ -1,450 +1,235 @@
-// src\app\api\publish\instagram\route.ts
-
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "next-auth";
 import { decrypt } from "@/lib/crypto";
+import { getCurrentUser, unauthorized } from "@/lib/session";
+import { publishErrorResponse, runPublish } from "@/lib/publishing";
+import { localUploadPath } from "@/lib/uploads";
+import { readJson } from "@/lib/validation";
+import fs from "fs/promises";
+import sharp from "sharp"; 
 
-const GRAPH_BASE_URL = "https://graph.facebook.com/v21.0";
-
+// Tipos para Graph API
 type GraphError = {
-    error?: {
-        message?: string;
-        type?: string;
-        code?: number;
-        error_subcode?: number;
-        fbtrace_id?: string;
-    };
+  error: {
+    message: string;
+    type: string;
+    code: number;
+    error_subcode?: number;
+    fbtrace_id: string;
+  };
 };
 
-async function graphPost<T = any>(
-    path: string,
-    params: Record<string, string>
-): Promise<T> {
-    const url = new URL(`${GRAPH_BASE_URL}${path}`);
-    const body = new URLSearchParams(params);
+type ContainerResponse = { id: string };
+type PublishResponse = { id: string };
+type PermalinkResponse = { id: string; permalink: string }; // 👈 Tipo nuevo
 
-    const res = await fetch(url.toString(), {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body,
-    });
+const GRAPH_VERSION = "v21.0";
+const BASE_URL = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
-    const text = await res.text();
-    let json: any;
+// --- Helper: Optimizar Imagen Localmente ---
+async function optimizeLocalImage(urlPath: string) {
     try {
-        json = text ? JSON.parse(text) : {};
-    } catch {
-        json = { raw: text };
-    }
-
-    if (!res.ok) {
-        console.error("❌ IG Graph error raw:", text);
-        console.error("❌ IG Graph parsed:", json);
-        const err = json as GraphError;
-        throw new Error(err.error?.message ?? text);
-    }
-
-    return json as T;
-}
-
-function buildAbsoluteUrl(pathOrUrl: string): string {
-    if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
-        return pathOrUrl;
-    }
-
-    const baseEnv =
-        process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
-
-    if (!baseEnv) {
-        throw new Error(
-            "Base URL not configured (NEXT_PUBLIC_APP_URL or VERCEL_URL). Cannot build absolute media URL for Instagram."
-        );
-    }
-
-    const base =
-        baseEnv.startsWith("http://") || baseEnv.startsWith("https://")
-            ? baseEnv
-            : `https://${baseEnv}`;
-
-    return `${base.replace(/\/$/, "")}${pathOrUrl}`;
-}
-
-async function publishWithRetry(
-    igUserId: string,
-    creationId: string,
-    pageAccessToken: string,
-    maxAttempts = 5,
-    delayMs = 3000
-): Promise<{ id: string }> {
-    let lastError: any = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // Solo se tocan archivos dentro de public/uploads
+        const localPath = localUploadPath(urlPath);
+        if (!localPath) return;
+        
         try {
-            const res = await graphPost<{ id: string }>(`/${igUserId}/media_publish`, {
-                creation_id: creationId,
-                access_token: pageAccessToken,
-            });
-            return res;
-        } catch (err: any) {
-            const msg = err?.message ?? "";
-            lastError = err;
+            const stats = await fs.stat(localPath);
+            const sizeMB = stats.size / (1024 * 1024);
 
-            if (msg.includes("Media ID is not available") && attempt < maxAttempts) {
-                console.warn(
-                    `⏳ Media aún no está listo en IG (intento ${attempt}/${maxAttempts}). Reintentando en ${delayMs / 1000
-                    }s...`
-                );
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
-                continue;
+            if (sizeMB > 4) {
+                console.log(`📉 Optimizando imagen IG (${sizeMB.toFixed(2)}MB) en disco...`);
+                const buffer = await fs.readFile(localPath);
+                // Se mantiene el formato original para que la extensión del archivo siga siendo correcta
+                const image = sharp(buffer).resize({ width: 1920, height: 1920, fit: 'inside', withoutEnlargement: true });
+                const { format } = await image.metadata();
+                const optimizedBuffer = await (format === "png"
+                    ? image.png({ compressionLevel: 9, palette: true })
+                    : format === "webp"
+                        ? image.webp({ quality: 85 })
+                        : image.jpeg({ quality: 85, mozjpeg: true })
+                ).toBuffer();
+                
+                await fs.writeFile(localPath, optimizedBuffer);
+                console.log(`✅ Archivo optimizado sobrescrito.`);
             }
-            throw err;
+        } catch (err) {
+            console.log("⚠️ Archivo no local o error de lectura:", localPath);
         }
+    } catch (e) {
+        console.warn("⚠️ No se pudo optimizar imagen local:", e);
     }
-
-    throw lastError ?? new Error(
-        "No se pudo publicar el media en Instagram tras varios intentos."
-    );
 }
 
-async function getInstagramCredentialsForUser(userId: number): Promise<{
-    pageAccessToken: string;
-    igUserId: string;
-}> {
-    const igAccess = await prisma.instagram_Access.findFirst({
-        where: {
-            userId,
-            redSocial: 2, 
-        },
-    });
+// Helper: Llamadas a Graph API (POST)
+async function graphPost<T>(url: string, body: any, token: string): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
 
-    if (!igAccess || !igAccess.accessToken) {
-        throw new Error(
-            "Instagram account not linked o falta accessToken en Instagram_Access."
-        );
-    }
+  const json = await res.json();
 
-    // DESENCRIPTAMOS EL TOKEN AQUÍ
-    // Si el token en la BD no está encriptado (formato antiguo), esto fallará.
-    // Asegúrate de reconectar la cuenta para guardar el token nuevo encriptado.
-    const userAccessToken = decrypt(igAccess.accessToken);
+  if (!res.ok || (json as any).error) {
+    console.error("❌ IG Graph error raw:", JSON.stringify(json));
+    const err = json as GraphError;
+    const msg = err.error?.message || "Unknown Graph API Error";
+    throw new Error(msg);
+  }
 
-    const url = new URL(`${GRAPH_BASE_URL}/me/accounts`);
-    url.searchParams.set(
-        "fields",
-        "id,name,access_token,instagram_business_account{id,username}"
-    );
-    url.searchParams.set("access_token", userAccessToken);
-
-    const res = await fetch(url.toString(), { method: "GET" });
-    const text = await res.text();
-    let json: any;
-    try {
-        json = text ? JSON.parse(text) : {};
-    } catch {
-        json = { raw: text };
-    }
-
-    if (!res.ok) {
-        console.error("❌ Error obteniendo páginas de Facebook (/me/accounts):", text);
-        const err = json as GraphError;
-        throw new Error(
-            err.error?.message ??
-            "No se pudo obtener las páginas de Facebook con el accessToken almacenado."
-        );
-    }
-
-    const pages: any[] = json?.data ?? [];
-    if (!pages.length) {
-        throw new Error(
-            "No se encontraron páginas de Facebook asociadas a este usuario."
-        );
-    }
-
-    const pageWithIg = pages.find(
-        (p) => p.instagram_business_account && p.instagram_business_account.id
-    );
-
-    if (!pageWithIg) {
-        console.error(
-            "⚠️ Ninguna página tiene instagram_business_account:",
-            JSON.stringify(pages, null, 2)
-        );
-        throw new Error(
-            "Ninguna de las páginas asociadas tiene una cuenta de Instagram vinculada."
-        );
-    }
-
-    const pageAccessToken = pageWithIg.access_token as string;
-    const igUserId = pageWithIg.instagram_business_account.id as string;
-
-    return {
-        pageAccessToken,
-        igUserId,
-    };
+  return json as T;
 }
 
-// LÓGICA INTERNA REUTILIZABLE (Para Cron y API)
-export async function publishToInstagramInternal(userId: number, postId: number, variantId?: number | null) {
-    // 1. Obtener Post + Variants + Medias
-    const post = await prisma.post.findUnique({
-        where: { id: postId },
-        include: {
-            variants: true,
-            medias: {
-                orderBy: { mediaOrder: "asc" },
-            },
-        },
-    });
+// Lógica de publicación interna
+export async function publishToInstagramInternal(userId: number, postId: number, variantId: number) {
+  // 1. Obtener datos
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new Error("User not found");
 
-    if (!post) {
-        throw new Error("POST_NOT_FOUND");
+  const access = await prisma.instagram_Access.findFirst({ where: { userId: user.id, redSocial: 2 } });
+  if (!access || !access.accessToken) throw new Error("Instagram not linked");
+
+  const userToken = decrypt(access.accessToken);
+
+  // 2. Obtener IG User ID
+  const accountsUrl = `${BASE_URL}/me/accounts?fields=name,access_token,instagram_business_account{id}`;
+  const accountsRes = await fetch(accountsUrl, { headers: { Authorization: `Bearer ${userToken}` } });
+  const accountsData = await accountsRes.json();
+  const pageWithIg = accountsData.data?.find((p: any) => p.instagram_business_account?.id);
+
+  if (!pageWithIg) throw new Error("No linked Instagram Business account found.");
+
+  const igUserId = pageWithIg.instagram_business_account.id;
+  const pageAccessToken = pageWithIg.access_token; 
+
+  // 3. Obtener Post y Variante
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    include: { medias: { orderBy: { mediaOrder: "asc" } } },
+  });
+  if (!post) throw new Error("Post not found");
+
+  const variant = await prisma.variant.findUnique({ where: { id: variantId } });
+  if (!variant) throw new Error("Variant not found");
+
+  // 4. Preparar Payload
+  const medias = post.medias || [];
+  const caption = variant.text || post.body || "";
+  const containerIds: string[] = [];
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://app.unipost.cl";
+
+  let publishId = "";
+
+  // --- SINGLE MEDIA ---
+  if (medias.length === 1) {
+    const m = medias[0];
+    const isVideo = m.type === "VIDEO" || m.mime.startsWith("video");
+    const mediaUrl = m.url.startsWith("http") ? m.url : `${appUrl}${m.url}`;
+
+    if (!isVideo) await optimizeLocalImage(m.url);
+
+    const endpoint = isVideo ? "media" : "media"; 
+    const typeParam = isVideo ? { media_type: "VIDEO", video_url: mediaUrl } : { image_url: mediaUrl };
+
+    console.log(`📸 Publicando IG single media: ${mediaUrl}`);
+
+    const container = await graphPost<ContainerResponse>(
+      `${BASE_URL}/${igUserId}/${endpoint}`,
+      { ...typeParam, caption, access_token: pageAccessToken },
+      pageAccessToken
+    );
+
+    const publish = await graphPost<PublishResponse>(
+      `${BASE_URL}/${igUserId}/media_publish`,
+      { creation_id: container.id, access_token: pageAccessToken },
+      pageAccessToken
+    );
+    
+    publishId = publish.id;
+  }
+
+  // --- CAROUSEL (ALBUM) ---
+  else if (medias.length > 1) {
+    for (const m of medias) {
+      const isVideo = m.type === "VIDEO" || m.mime.startsWith("video");
+      const mediaUrl = m.url.startsWith("http") ? m.url : `${appUrl}${m.url}`;
+
+      if (!isVideo) await optimizeLocalImage(m.url);
+
+      const typeParam = isVideo ? { media_type: "VIDEO", video_url: mediaUrl } : { image_url: mediaUrl };
+
+      const itemContainer = await graphPost<ContainerResponse>(
+        `${BASE_URL}/${igUserId}/media`,
+        { ...typeParam, is_carousel_item: true, access_token: pageAccessToken },
+        pageAccessToken
+      );
+      containerIds.push(itemContainer.id);
     }
 
-    const variant =
-        variantId != null
-            ? post.variants.find((v) => v.id === variantId)
-            : post.variants.find((v) => v.network === "INSTAGRAM");
+    console.log(`📸 Creando Carrusel IG con ${containerIds.length} items`);
+    const carouselContainer = await graphPost<ContainerResponse>(
+      `${BASE_URL}/${igUserId}/media`,
+      { media_type: "CAROUSEL", children: containerIds, caption, access_token: pageAccessToken },
+      pageAccessToken
+    );
 
-    if (!variant) {
-        throw new Error("INSTAGRAM_VARIANT_NOT_FOUND");
-    }
+    const publish = await graphPost<PublishResponse>(
+      `${BASE_URL}/${igUserId}/media_publish`,
+      { creation_id: carouselContainer.id, access_token: pageAccessToken },
+      pageAccessToken
+    );
+    
+    publishId = publish.id;
+  } else {
+      throw new Error("No media provided for Instagram");
+  }
 
-    let medias = post.medias;
-    if (!medias || medias.length === 0) {
-        throw new Error("NO_MEDIA_FOR_POST");
-    }
+  // 5. 🟢 RECUPERAR PERMALINK (Paso Nuevo)
+  // Hacemos una llamada GET extra para obtener la URL pública
+  let permalink = null;
+  try {
+      const permalinkRes = await fetch(`${BASE_URL}/${publishId}?fields=permalink`, {
+          headers: { Authorization: `Bearer ${pageAccessToken}` },
+      });
+      const permalinkData = await permalinkRes.json();
+      if (permalinkData.permalink) {
+          permalink = permalinkData.permalink;
+      }
+  } catch (e) {
+      console.warn("⚠️ No se pudo obtener permalink de IG:", e);
+  }
 
-    // Enforce IG limit: max 10 items
-    if (medias.length > 10) {
-        medias = medias.slice(0, 10);
-    }
+  // 6. Actualizar BD con URI y PERMALINK
+  await prisma.variant.update({
+      where: { id: variantId },
+      data: { 
+          status: "PUBLISHED", 
+          uri: publishId, 
+          permalink: permalink,
+          date_sent: new Date() 
+      }
+  });
 
-    // 2. Obtener credenciales usando el ID de usuario
-    const { pageAccessToken, igUserId } = await getInstagramCredentialsForUser(userId);
-
-    const caption =
-        (variant.text && variant.text.trim().length > 0
-            ? variant.text
-            : post.body || "") ?? "";
-
-    console.log("📸 IG medias candidate:", {
-        postId: post.id,
-        medias: medias.map((m) => ({
-            id: m.id,
-            type: m.type,
-            mime: m.mime,
-            url: m.url,
-            mediaOrder: m.mediaOrder,
-        })),
-    });
-
-    let finalMediaId: string | null = null;
-
-    // 3. Lógica de publicación (Single vs Carousel)
-    if (medias.length === 1) {
-        // Single media flow
-        const media = medias[0];
-        const mediaUrl = buildAbsoluteUrl(media.url);
-        const isVideo =
-            media.type === "VIDEO" ||
-            media.mime.toLowerCase().startsWith("video/");
-
-        console.log("📸 Publicando IG single media:", {
-            mediaId: media.id,
-            urlSent: mediaUrl,
-            isVideo,
-        });
-
-        let containerRes: { id: string };
-
-        if (isVideo) {
-            containerRes = await graphPost<{ id: string }>(`/${igUserId}/media`, {
-                media_type: "VIDEO",
-                video_url: mediaUrl,
-                caption,
-                access_token: pageAccessToken,
-            });
-        } else {
-            containerRes = await graphPost<{ id: string }>(`/${igUserId}/media`, {
-                image_url: mediaUrl,
-                caption,
-                access_token: pageAccessToken,
-            });
-        }
-
-        const publishRes = await publishWithRetry(
-            igUserId,
-            containerRes.id,
-            pageAccessToken
-        );
-
-        finalMediaId = publishRes.id;
-        console.log("✅ IG single media published:", publishRes);
-
-    } else {
-        // Carousel flow
-        const childrenIds: string[] = [];
-
-        for (const media of medias) {
-            const mediaUrl = buildAbsoluteUrl(media.url);
-            const isVideo =
-                media.type === "VIDEO" ||
-                media.mime.toLowerCase().startsWith("video/");
-
-            console.log("📸 Creando contenedor de carrusel:", {
-                mediaId: media.id,
-                urlSent: mediaUrl,
-                isVideo,
-            });
-
-            let childContainer: { id: string };
-
-            if (isVideo) {
-                childContainer = await graphPost<{ id: string }>(
-                    `/${igUserId}/media`,
-                    {
-                        media_type: "VIDEO",
-                        video_url: mediaUrl,
-                        is_carousel_item: "true",
-                        access_token: pageAccessToken,
-                    }
-                );
-            } else {
-                childContainer = await graphPost<{ id: string }>(
-                    `/${igUserId}/media`,
-                    {
-                        image_url: mediaUrl,
-                        is_carousel_item: "true",
-                        access_token: pageAccessToken,
-                    }
-                );
-            }
-
-            childrenIds.push(childContainer.id);
-        }
-
-        console.log("📚 IDs de hijos para carrusel:", childrenIds);
-
-        const carouselContainer = await graphPost<{ id: string }>(
-            `/${igUserId}/media`,
-            {
-                media_type: "CAROUSEL",
-                children: childrenIds.join(","),
-                caption,
-                access_token: pageAccessToken,
-            }
-        );
-
-        console.log("✅ IG carousel container created:", carouselContainer);
-
-        const publishRes = await publishWithRetry(
-            igUserId,
-            carouselContainer.id,
-            pageAccessToken
-        );
-
-        finalMediaId = publishRes.id;
-        console.log("✅ IG carousel published:", publishRes);
-    }
-
-    // 4. Obtener permalink (opcional)
-    let permalink: string | null = null;
-    if (finalMediaId) {
-        try {
-            const mediaData = await fetch(
-                `${GRAPH_BASE_URL}/${finalMediaId}?fields=permalink&access_token=${encodeURIComponent(
-                    pageAccessToken
-                )}`
-            );
-            const json = await mediaData.json();
-            if (json?.permalink) {
-                permalink = json.permalink as string;
-            }
-        } catch (e) {
-            console.warn("⚠️ Could not fetch IG permalink:", e);
-        }
-    }
-
-    // 5. Actualizar DB
-    await prisma.$transaction(async (tx) => {
-        await tx.variant.update({
-            where: { id: variant.id },
-            data: {
-                status: "PUBLISHED",
-                uri: finalMediaId ?? undefined,
-                permalink: permalink ?? undefined,
-            },
-        });
-        if (post.status !== "PUBLISHED") {
-            await tx.post.update({
-                where: { id: post.id },
-                data: {
-                    status: "PUBLISHED",
-                },
-            });
-        }
-    });
-
-    return {
-        ok: true,
-        mediaId: finalMediaId,
-        uri: finalMediaId,
-        permalink,
-    };
+  return { ok: true, id: publishId, permalink };
 }
 
-
-// HANDLER POST (Para llamadas desde el navegador/frontend)
+// Handler POST
 export async function POST(req: Request) {
-    try {
-        const session = await getServerSession();
-        if (!session || !session.user?.email) {
-            return NextResponse.json(
-                { ok: false, error: "NOT_AUTHENTICATED" },
-                { status: 401 }
-            );
-        }
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
 
-        const user = await prisma.user.findUnique({
-            where: { email: session.user.email },
-        });
-
-        if (!user) {
-            return NextResponse.json(
-                { ok: false, error: "USER_NOT_FOUND" },
-                { status: 404 }
-            );
-        }
-
-        const body = await req.json();
-        const { postId, variantId } = body as {
-            postId: number;
-            variantId?: number | null;
-        };
-
-        if (!postId) {
-            return NextResponse.json(
-                { ok: false, error: "MISSING_POST_ID" },
-                { status: 400 }
-            );
-        }
-
-        // Llamamos a la función interna
-        const result = await publishToInstagramInternal(user.id, postId, variantId);
-
-        return NextResponse.json(result, { status: 200 });
-
-    } catch (err: any) {
-        console.error("❌ Error en /api/publish/instagram:", err);
-        return NextResponse.json(
-            {
-                ok: false,
-                error: err?.message ?? "INTERNAL_ERROR",
-            },
-            { status: 500 }
-        );
-    }
+  try {
+    const { postId, variantId } = await readJson<{ postId: number; variantId: number }>(req);
+    const result = await runPublish({ userId: user.id, postId, variantId, network: "INSTAGRAM" }, (ctx) =>
+      publishToInstagramInternal(user.id, ctx.postId, ctx.variantId)
+    );
+    return NextResponse.json(result);
+  } catch (e) {
+    console.error("❌ Error en /api/publish/instagram:", e);
+    return publishErrorResponse(e);
+  }
 }

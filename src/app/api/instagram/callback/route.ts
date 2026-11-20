@@ -6,6 +6,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { encrypt } from "@/lib/crypto";
+import { verifyOAuthState } from "@/lib/oauthState";
+import { getCurrentUser } from "@/lib/session";
 
 const FB_VERSION = process.env.FACEBOOK_API_VERSION ?? "v21.0";
 const GRAPH_BASE = `https://graph.facebook.com/${FB_VERSION}`;
@@ -113,14 +115,15 @@ async function exchangeShortForLongLived(shortLivedToken: string) {
 async function getInstagramAccount(longLivedToken: string) {
   // 3.1) Listar las páginas asociadas al usuario
   const pagesRes = await fetch(
-    `${GRAPH_BASE}/me/accounts?access_token=${encodeURIComponent(longLivedToken)}`
+    `${GRAPH_BASE}/me/accounts?fields=id,name`,
+    { headers: { Authorization: `Bearer ${longLivedToken}` } }
   );
 
   const rawText = await pagesRes.text();
-  console.log("📘 /me/accounts raw response:", rawText);
 
   if (!pagesRes.ok) {
-    throw new Error(`Error al obtener páginas de Facebook: ${rawText}`);
+    console.error("Error al obtener páginas de Facebook:", pagesRes.status);
+    throw new Error("pages_fetch_failed");
   }
 
   const pagesData = JSON.parse(rawText) as {
@@ -214,17 +217,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  // El "state" es el user.id que pusimos en /api/instagram/connect
-  let appUserId: number | null = null;
-  try {
-    const decoded = decodeURIComponent(stateParam);
-    const parsed = parseInt(decoded, 10);
-    if (!Number.isNaN(parsed)) {
-      appUserId = parsed;
-    }
-  } catch {
-    // ignore, se maneja abajo
-  }
+  // El usuario se toma de la sesión; "state" solo sirve para validar que el flujo lo inició él.
+  const stateValid = await verifyOAuthState("instagram", stateParam);
+  const sessionUser = stateValid ? await getCurrentUser() : null;
+  const appUserId = sessionUser?.id ?? null;
 
   if (!appUserId) {
     const redirectUrl = new URL(
@@ -259,7 +255,7 @@ export async function GET(req: NextRequest) {
         where: { id: existing.id },
         data: {
           usuarioRed: username,
-          accessToken: longLivedUserToken,
+          accessToken: encrypt(longLivedUserToken),
         },
       });
     } else {
@@ -278,12 +274,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(redirectOk);
   } catch (err: any) {
     console.error("Error en callback de Instagram:", err);
-    const msg = err instanceof Error ? err.message : "unknown_error";
-
-    const redirectError = new URL(
-      `/perfil?instagram_error=${encodeURIComponent(msg)}`,
-      baseOrigin
-    );
+    // Código fijo: no exponer mensajes internos de la API en la URL.
+    const redirectError = new URL("/perfil?instagram_error=link_failed", baseOrigin);
     return NextResponse.redirect(redirectError);
   }
 }

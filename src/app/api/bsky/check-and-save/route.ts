@@ -1,4 +1,5 @@
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { getBskyAgent } from "@/lib/bsky/agent";
 import { prisma } from "@/lib/prisma";
 import { encryptBlueskySecret } from "@/lib/cryptoBluesky";
@@ -7,7 +8,7 @@ import { encryptBlueskySecret } from "@/lib/cryptoBluesky";
 // Si la respuesta es válida, se guardan en la base de datos encriptado.
 
 export async function POST(req: Request) {
-  const session = await getServerSession(); // No es obligatorio authOptions aquí
+  const session = await getServerSession(authOptions); // No es obligatorio authOptions aquí
   if (!session) {
     return Response.json({ ok: false, error: "No session found" }, { status: 401 });
   }

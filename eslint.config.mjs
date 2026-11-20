@@ -12,12 +12,18 @@ const compat = new FlatCompat({
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
+    // Deuda heredada: las rutas de API aún tipan respuestas externas con `any`.
+    // Se deja como advertencia para no bloquear el build mientras se tipan.
+    rules: { "@typescript-eslint/no-explicit-any": "warn" },
+  },
+  {
     ignores: [
       "node_modules/**",
       ".next/**",
       "out/**",
       "build/**",
       "next-env.d.ts",
+      "src/generated/**",
     ],
   },
 ];

@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
+import { resolveTargetUser } from "@/lib/session";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/prisma";
 import { decrypt } from "@/lib/crypto";
 
 const GRAPH_BASE_URL = "https://graph.facebook.com/v21.0";
 
 export async function GET(req: Request) {
+  // Solo el propio usuario, un super admin o un Manager de su organización pueden ver estos datos.
+  const target = await resolveTargetUser(req);
+  if ("error" in target) return target.error;
+
   try {
-    const session = await getServerSession();
+    const session = await getServerSession(authOptions);
     if (!session?.user?.email) return NextResponse.json({ ok: false }, { status: 401 });
 
     // 1. Determinar ID del usuario (Prioridad: Query Param > Sesión)

@@ -1,643 +1,266 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
+import toast from "react-hot-toast";
+import { NETWORKS, type NetworkKey } from "@/lib/networks";
+import { Avatar, Button, Card, Field, Spinner, inputClass } from "@/components/ui";
 
-// Importación de Logos
-import BskyIcon from "@/app/assets/bsky.png";
-import IgIcon from "@/app/assets/ig.png";
-import FbIcon from "@/app/assets/fb.png";
-import TtIcon from "@/app/assets/tt.png";
-import XIcon from "@/app/assets/x.png";
+// Perfil normalizado para mostrar cualquier red con la misma tarjeta.
+type NormalizedProfile = { avatar?: string | null; name?: string | null; handle?: string | null; stats: { label: string; value?: number | null }[] };
+type CardState = { loading: boolean; linked: boolean; expired: boolean; username?: string; profile?: NormalizedProfile | null; profileLoading: boolean };
 
-interface Props {
-  userEmail?: string | null;
+type Profile = Record<string, unknown> & { picture?: { data?: { url?: string } } };
+
+type NetworkConfig = {
+  key: NetworkKey;
+  base: string; // prefijo de la API: /api/<base>/status, /profile, /unlink, /connect
+  description: string;
+  usernameField: string;
+  normalize: (p: Profile) => NormalizedProfile;
+};
+
+const num = (v: unknown) => (typeof v === "number" ? v : null);
+const str = (v: unknown) => (typeof v === "string" ? v : null);
+
+const CONFIGS: NetworkConfig[] = [
+  {
+    key: "INSTAGRAM", base: "instagram", usernameField: "username",
+    description: "Requiere una cuenta Profesional (Business o Creator) vinculada a una Página de Facebook.",
+    normalize: (p) => ({ avatar: str(p.profilePictureUrl), name: str(p.name) ?? str(p.username), handle: str(p.username), stats: [{ label: "Seguidores", value: num(p.followers) }, { label: "Posts", value: num(p.posts) ?? num(p.mediaCount) }] }),
+  },
+  {
+    key: "FACEBOOK", base: "facebook", usernameField: "pageName",
+    description: "Publica en una Página de Facebook que administres.",
+    normalize: (p) => ({ avatar: p.picture?.data?.url ?? null, name: str(p.name), handle: null, stats: [{ label: "Seguidores", value: num(p.followers_count) }, { label: "Me gusta", value: num(p.fan_count) }] }),
+  },
+  {
+    key: "TWITTER", base: "x_twitter", usernameField: "username",
+    description: "Publica tweets con imágenes o video.",
+    normalize: (p) => ({ avatar: str(p.avatar), name: str(p.name), handle: str(p.username), stats: [{ label: "Seguidores", value: num(p.followers) }, { label: "Tweets", value: num(p.tweets) }] }),
+  },
+  {
+    key: "BLUESKY", base: "bsky", usernameField: "nombreUsuario",
+    description: "Se conecta con una App Password (no tu contraseña normal).",
+    normalize: (p) => ({ avatar: str(p.avatar), name: str(p.displayName), handle: str(p.handle), stats: [{ label: "Seguidores", value: num(p.followers) }, { label: "Posts", value: num(p.posts) }] }),
+  },
+  {
+    key: "TIKTOK", base: "tiktok", usernameField: "username",
+    description: "Publica videos. En modo sandbox solo se publican como privados.",
+    normalize: (p) => ({ avatar: str(p.avatar_url), name: str(p.display_name), handle: str(p.username), stats: [{ label: "Seguidores", value: num(p.follower_count) }, { label: "Me gusta", value: num(p.likes_count) }] }),
+  },
+];
+
+// Mensajes para los parámetros con que vuelven los flujos OAuth a /perfil.
+const OAUTH_MESSAGES: Record<string, { ok: boolean; text: string }> = {
+  "instagram=linked": { ok: true, text: "Instagram conectado correctamente" },
+  "facebook=linked": { ok: true, text: "Página de Facebook conectada correctamente" },
+  "tiktok=linked": { ok: true, text: "TikTok conectado correctamente" },
+  "twitter=linked": { ok: true, text: "X conectado correctamente" },
+};
+
+function oauthMessageFromUrl(): { ok: boolean; text: string } | null {
+  const params = new URLSearchParams(window.location.search);
+  for (const [k, v] of params) {
+    const known = OAUTH_MESSAGES[`${k}=${v}`];
+    if (known) return known;
+    if (k === "instagram_error") return { ok: false, text: "No se pudo conectar Instagram. Verifica que tu cuenta sea Profesional y esté vinculada a una Página." };
+    if (k === "fb_error") return { ok: false, text: "No se pudo conectar Facebook. Asegúrate de administrar al menos una Página." };
+    if (k === "error") return { ok: false, text: v.includes("denied") ? "Cancelaste la conexión." : "No se pudo completar la conexión. Inténtalo de nuevo." };
+  }
+  return null;
 }
 
-export default function CuentasConectadas({ userEmail }: Props) {
-  // --- BLUESKY state ---
-  const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
-  const [linked, setLinked] = useState(false);
-  const [linkedUser, setLinkedUser] = useState("");
-  const [profile, setProfile] = useState<any>(null);
-  const [refreshDisabled, setRefreshDisabled] = useState(false);
-  const [checkingLinkStatus, setCheckingLinkStatus] = useState(true);
-  const [checkingProfile, setCheckingProfile] = useState(true);
+export default function CuentasConectadas() {
+  const [states, setStates] = useState<Record<string, CardState>>(() =>
+    Object.fromEntries(CONFIGS.map((c) => [c.key, { loading: true, linked: false, expired: false, profileLoading: false }]))
+  );
 
-  // --- INSTAGRAM state ---
-  const [igLinked, setIgLinked] = useState(false);
-  const [igUsername, setIgUsername] = useState("");
-  const [igCheckingStatus, setIgCheckingStatus] = useState(true);
-  const [igStatus, setIgStatus] = useState("");
-  const [igLoading, setIgLoading] = useState(false);
-  const [igProfile, setIgProfile] = useState<any>(null);
-  const [igCheckingProfile, setIgCheckingProfile] = useState(false);
-  const [igRefreshDisabled, setIgRefreshDisabled] = useState(false);
+  const patch = useCallback((key: NetworkKey, p: Partial<CardState>) => setStates((s) => ({ ...s, [key]: { ...s[key], ...p } })), []);
 
-  // --- FACEBOOK state ---
-  const [fbLinked, setFbLinked] = useState(false);
-  const [fbPageName, setFbPageName] = useState("");
-  const [fbCheckingStatus, setFbCheckingStatus] = useState(true);
-  const [fbStatus, setFbStatus] = useState("");
-  const [fbLoading, setFbLoading] = useState(false);
-  const [fbProfile, setFbProfile] = useState<any>(null);
-  const [fbCheckingProfile, setFbCheckingProfile] = useState(false);
-  const [fbRefreshDisabled, setFbRefreshDisabled] = useState(false);
-
-  // --- TIKTOK state ---
-  const [ttLinked, setTtLinked] = useState(false);
-  const [ttUsername, setTtUsername] = useState("");
-  const [ttCheckingStatus, setTtCheckingStatus] = useState(true);
-  const [ttStatus, setTtStatus] = useState("");
-  const [ttLoading, setTtLoading] = useState(false);
-  const [ttProfile, setTtProfile] = useState<any>(null);
-  const [ttCheckingProfile, setTtCheckingProfile] = useState(false);
-  const [ttRefreshDisabled, setTtRefreshDisabled] = useState(false);
-  const [ttExpired, setTtExpired] = useState(false);
-
-  // --- X (TWITTER) state 🆕 ---
-  const [xLinked, setXLinked] = useState(false);
-  const [xUsername, setXUsername] = useState("");
-  const [xCheckingStatus, setXCheckingStatus] = useState(true);
-  const [xStatus, setXStatus] = useState("");
-  const [xLoading, setXLoading] = useState(false);
-  const [xProfile, setXProfile] = useState<any>(null);
-  const [xCheckingProfile, setXCheckingProfile] = useState(false);
-  const [xRefreshDisabled, setXRefreshDisabled] = useState(false);
-  const [xExpired, setXExpired] = useState(false);
-
-  // --- EFECTOS ---
-  useEffect(() => {
-    if (!userEmail) return;
-    
-    // 1. Bluesky check
-    (async () => {
-      try {
-        const res = await fetch("/api/bsky/status");
-        const data = await res.json();
-        if (data.ok && data.linked) {
-          setLinked(true);
-          setLinkedUser(data.nombreUsuario); 
-          loadProfile().finally(() => setCheckingProfile(false));
-        }
-      } catch (e) { console.error(e); } 
-      finally { setCheckingLinkStatus(false); }
-    })();
-
-    // 2. Instagram check
-    (async () => {
-      try {
-        const res = await fetch("/api/instagram/status");
-        const data = await res.json();
-        if (data.ok && data.linked) {
-          setIgLinked(true);
-          setIgUsername(data.username);
-          loadInstagramProfile();
-        }
-      } catch (err) { console.error(err); } 
-      finally { setIgCheckingStatus(false); }
-    })();
-
-    // 3. Facebook check
-    (async () => {
-      try {
-        const res = await fetch("/api/facebook/status");
-        const data = await res.json();
-        if (data.ok && data.linked) {
-          setFbLinked(true);
-          setFbPageName(data.pageName || "Página de Facebook");
-          loadFacebookProfile();
-        }
-      } catch (err) { console.error(err); } 
-      finally { setFbCheckingStatus(false); }
-    })();
-
-    // 4. TikTok check
-    (async () => {
-      try {
-        const res = await fetch("/api/tiktok/status");
-        const data = await res.json();
-        if (data.ok && data.linked) {
-          setTtLinked(true);
-          setTtUsername(data.username || "TikTok User");
-          if (data.expired) {
-            setTtExpired(true);
-            setTtCheckingProfile(false);
-          } else {
-            setTtExpired(false);
-            loadTikTokProfile();
-          }
-        }
-      } catch (err) { console.error(err); } 
-      finally { setTtCheckingStatus(false); }
-    })();
-
-    // 5. X (Twitter) check 🆕
-    (async () => {
-      try {
-        const res = await fetch("/api/x_twitter/status");
-        const data = await res.json();
-        if (data.ok && data.linked) {
-          setXLinked(true);
-          setXUsername(data.username || "Usuario X");
-          if (data.expired) {
-            setXExpired(true);
-            setXCheckingProfile(false);
-          } else {
-            setXExpired(false);
-            loadXProfile();
-          }
-        }
-      } catch (err) { console.error(err); } 
-      finally { setXCheckingStatus(false); }
-    })();
-
-  }, [userEmail]);
-
-  // --- FUNCIONES BLUESKY ---
-  async function handleCheckAndSave() {
-    setLoading(true);
-    setStatus("Verificando credenciales...");
+  const loadProfile = useCallback(async (cfg: NetworkConfig) => {
+    patch(cfg.key, { profileLoading: true });
     try {
-      const res = await fetch("/api/bsky/check-and-save", {
+      const data = await fetch(`/api/${cfg.base}/profile`).then((r) => r.json());
+      patch(cfg.key, { profile: data.ok && data.profile ? cfg.normalize(data.profile) : null });
+    } catch {
+      patch(cfg.key, { profile: null });
+    } finally {
+      patch(cfg.key, { profileLoading: false });
+    }
+  }, [patch]);
+
+  const loadStatus = useCallback(async (cfg: NetworkConfig) => {
+    try {
+      const data = await fetch(`/api/${cfg.base}/status`).then((r) => r.json());
+      const linked = Boolean(data.ok && data.linked);
+      patch(cfg.key, { loading: false, linked, expired: Boolean(data.expired), username: data[cfg.usernameField] });
+      if (linked && !data.expired) loadProfile(cfg);
+    } catch {
+      patch(cfg.key, { loading: false });
+    }
+  }, [patch, loadProfile]);
+
+  useEffect(() => {
+    CONFIGS.forEach(loadStatus);
+    const msg = oauthMessageFromUrl();
+    if (msg) {
+      (msg.ok ? toast.success : toast.error)(msg.text, { duration: 6000 });
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, [loadStatus]);
+
+  const connectedCount = Object.values(states).filter((s) => s.linked).length;
+
+  return (
+    <div>
+      <p className="mb-5 text-sm text-slate-400">
+        {connectedCount === 0 ? "Conecta tus redes para empezar a publicar." : `${connectedCount} de ${CONFIGS.length} redes conectadas.`}
+      </p>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {CONFIGS.map((cfg) => (
+          <NetworkCard key={cfg.key} cfg={cfg} state={states[cfg.key]} onChanged={() => loadStatus(cfg)} onRefresh={() => loadProfile(cfg)} onUnlinked={() => patch(cfg.key, { linked: false, expired: false, profile: null, username: undefined })} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NetworkCard({ cfg, state, onChanged, onRefresh, onUnlinked }: { cfg: NetworkConfig; state: CardState; onChanged: () => void; onRefresh: () => void; onUnlinked: () => void }) {
+  const meta = NETWORKS[cfg.key];
+  const [busy, setBusy] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [refreshCooldown, setRefreshCooldown] = useState(false);
+
+  // Bluesky (App Password)
+  const [identifier, setIdentifier] = useState("");
+  const [appPassword, setAppPassword] = useState("");
+  const [bskyError, setBskyError] = useState<string | null>(null);
+
+  function connect() {
+    setBusy(true);
+    window.location.href = `/api/${cfg.base}/connect`;
+  }
+
+  async function connectBluesky(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setBskyError(null);
+    try {
+      const data = await fetch("/api/bsky/check-and-save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifier, password }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setStatus("✅ Cuenta Bluesky vinculada");
-        setLinked(true);
-        setCheckingProfile(true);
-        await loadProfile(); 
-        setCheckingProfile(false);
-      } else {
-        setStatus("❌ Error: " + (data.error || "Credenciales inválidas"));
-      }
-    } catch { setStatus("⚠️ Error de conexión"); }
-    setLoading(false);
+        body: JSON.stringify({ identifier: identifier.trim(), password: appPassword }),
+      }).then((r) => r.json());
+      if (!data.ok) throw new Error(data.error);
+      toast.success("Bluesky conectado correctamente");
+      setAppPassword("");
+      onChanged();
+    } catch {
+      setBskyError("No pudimos conectar. Revisa tu usuario y que uses una App Password válida.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function handleUnlink() {
-    if (!confirm("¿Seguro que quieres desvincular Bluesky?")) return;
-    setLoading(true);
+  async function unlink() {
+    setBusy(true);
     try {
-      const res = await fetch("/api/bsky/unlink", { method: "DELETE" });
-      const data = await res.json();
-      if (data.ok) {
-        setLinked(false);
-        setLinkedUser("");
-        setProfile(null);
-        setStatus("🔓 Bluesky desvinculado");
-      } else { setStatus("❌ Error al desvincular"); }
-    } finally { setLoading(false); }
+      const data = await fetch(`/api/${cfg.base}/unlink`, { method: "DELETE" }).then((r) => r.json());
+      if (!data.ok) throw new Error();
+      toast.success(`${meta.label} desconectado`);
+      onUnlinked();
+    } catch {
+      toast.error(`No se pudo desconectar ${meta.label}`);
+    } finally {
+      setBusy(false);
+      setConfirmUnlink(false);
+    }
   }
 
-  async function loadProfile() {
-    try {
-      const res = await fetch("/api/bsky/profile");
-      const data = await res.json();
-      if (data.ok && data.profile) {
-        setProfile(data.profile);
-        setLinkedUser(data.profile.handle);
-      }
-    } catch (e) { console.error(e); }
-  }
-
-  async function handleRefresh() {
-    if (refreshDisabled) return;
-    await loadProfile();
-    setRefreshDisabled(true);
-    setTimeout(() => setRefreshDisabled(false), 5 * 60 * 1000);
-  }
-
-  // --- FUNCIONES INSTAGRAM ---
-  async function handleInstagramConnect() {
-    setIgLoading(true);
-    setIgStatus("Redirigiendo a Instagram...");
-    window.location.href = "/api/instagram/connect";
-  }
-
-  async function handleInstagramUnlink() {
-    if (!confirm("¿Seguro que quieres desvincular Instagram?")) return;
-    setIgLoading(true);
-    try {
-      const res = await fetch("/api/instagram/unlink", { method: "DELETE" });
-      const data = await res.json();
-      if (data.ok) {
-        setIgLinked(false);
-        setIgUsername("");
-        setIgProfile(null);
-        setIgStatus("🔓 Instagram desvinculado");
-      } else { setIgStatus("❌ Error al desvincular"); }
-    } catch { setIgStatus("⚠️ Error de conexión"); } 
-    finally { setIgLoading(false); }
-  }
-  
-  async function loadInstagramProfile() {
-    setIgCheckingProfile(true);
-    try {
-      const res = await fetch("/api/instagram/profile");
-      const data = await res.json();
-      if (data.ok && data.profile) setIgProfile(data.profile);
-    } catch (err) { console.error(err); } 
-    finally { setIgCheckingProfile(false); }
-  }
-
-  async function handleInstagramRefresh() {
-    if (igRefreshDisabled) return;
-    await loadInstagramProfile();
-    setIgRefreshDisabled(true);
-    setTimeout(() => setIgRefreshDisabled(false), 5 * 60 * 1000);
-  }
-
-  // --- FUNCIONES FACEBOOK ---
-  async function handleFacebookConnect() {
-    setFbLoading(true);
-    setFbStatus("Redirigiendo a Facebook...");
-    window.location.href = "/api/facebook/connect";
-  }
-
-  async function handleFacebookUnlink() {
-    if (!confirm("¿Seguro que quieres desvincular tu Página de Facebook?")) return;
-    setFbLoading(true);
-    try {
-      const res = await fetch("/api/facebook/unlink", { method: "DELETE" });
-      const data = await res.json();
-      if (data.ok) {
-        setFbLinked(false);
-        setFbPageName("");
-        setFbProfile(null);
-        setFbStatus("🔓 Facebook desvinculado");
-      } else { setFbStatus("❌ Error al desvincular"); }
-    } catch { setFbStatus("⚠️ Error de conexión"); } 
-    finally { setFbLoading(false); }
-  }
-
-  async function loadFacebookProfile() {
-    setFbCheckingProfile(true);
-    try {
-      const res = await fetch("/api/facebook/profile");
-      const data = await res.json();
-      if (data.ok && data.profile) setFbProfile(data.profile);
-    } catch (err) { console.error(err); } 
-    finally { setFbCheckingProfile(false); }
-  }
-
-  async function handleFacebookRefresh() {
-    if (fbRefreshDisabled) return;
-    await loadFacebookProfile();
-    setFbRefreshDisabled(true);
-    setTimeout(() => setFbRefreshDisabled(false), 5 * 60 * 1000);
-  }
-
-  // --- FUNCIONES TIKTOK ---
-  async function handleTikTokConnect() {
-    setTtLoading(true);
-    setTtStatus("Redirigiendo a TikTok...");
-    window.location.href = "/api/tiktok/connect";
-  }
-
-  async function handleTikTokUnlink() {
-    if (!confirm("¿Seguro que quieres desvincular TikTok?")) return;
-    setTtLoading(true);
-    try {
-      const res = await fetch("/api/tiktok/unlink", { method: "DELETE" });
-      const data = await res.json();
-      if (data.ok) {
-        setTtLinked(false);
-        setTtUsername("");
-        setTtProfile(null);
-        setTtStatus("🔓 TikTok desvinculado");
-        setTtExpired(false);
-      } else { setTtStatus("❌ Error al desvincular"); }
-    } catch { setTtStatus("⚠️ Error de conexión"); } 
-    finally { setTtLoading(false); }
-  }
-
-  async function loadTikTokProfile() {
-    setTtCheckingProfile(true);
-    try {
-      const res = await fetch("/api/tiktok/profile");
-      const data = await res.json();
-      if (data.ok && data.profile) setTtProfile(data.profile);
-    } catch (err) { console.error(err); } 
-    finally { setTtCheckingProfile(false); }
-  }
-
-  async function handleTikTokRefresh() {
-    if (ttRefreshDisabled) return;
-    await loadTikTokProfile();
-    setTtRefreshDisabled(true);
-    setTimeout(() => setTtRefreshDisabled(false), 5 * 60 * 1000);
-  }
-
-  // --- FUNCIONES X (TWITTER) 🆕 ---
-  async function handleXConnect() {
-    setXLoading(true);
-    setXStatus("Redirigiendo a X...");
-    window.location.href = "/api/x_twitter/connect";
-  }
-
-  async function handleXUnlink() {
-    if (!confirm("¿Seguro que quieres desvincular X (Twitter)?")) return;
-    setXLoading(true);
-    try {
-      const res = await fetch("/api/x_twitter/unlink", { method: "DELETE" });
-      const data = await res.json();
-      if (data.ok) {
-        setXLinked(false);
-        setXUsername("");
-        setXProfile(null);
-        setXStatus("🔓 X desvinculado");
-        setXExpired(false);
-      } else { setXStatus("❌ Error al desvincular"); }
-    } catch { setXStatus("⚠️ Error de conexión"); } 
-    finally { setXLoading(false); }
-  }
-
-  async function loadXProfile() {
-    setXCheckingProfile(true);
-    try {
-      const res = await fetch("/api/x_twitter/profile");
-      const data = await res.json();
-      if (data.ok && data.profile) setXProfile(data.profile);
-    } catch (err) { console.error(err); } 
-    finally { setXCheckingProfile(false); }
-  }
-
-  async function handleXRefresh() {
-    if (xRefreshDisabled) return;
-    await loadXProfile();
-    setXRefreshDisabled(true);
-    setTimeout(() => setXRefreshDisabled(false), 5 * 60 * 1000);
+  function refresh() {
+    onRefresh();
+    setRefreshCooldown(true);
+    setTimeout(() => setRefreshCooldown(false), 60_000);
   }
 
   return (
-    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mx-auto animate-in fade-in slide-in-from-bottom-4">
-      
-      {/* 1. BLUESKY */}
-      <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
-            <Image src={BskyIcon} alt="Bluesky" width={120} height={120} />
+    <Card className="flex flex-col p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <Image src={meta.icon} alt="" width={32} height={32} className="h-8 w-8" />
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold text-white">{meta.label}</h3>
+          {!state.loading && (
+            <p className={`text-xs ${state.expired ? "text-amber-300" : state.linked ? "text-emerald-300" : "text-slate-500"}`}>
+              {state.expired ? "Sesión caducada" : state.linked ? "Conectada" : "No conectada"}
+            </p>
+          )}
         </div>
-        
-        <h2 className="text-2xl font-bold mb-4 flex items-center justify-center gap-2 relative z-10">
-          Bluesky
-        </h2>
-        {checkingLinkStatus ? (
-          <p className="text-slate-200/70 text-sm animate-pulse text-center relative z-10">🔄 Verificando...</p>
-        ) : linked ? (
-          <div className="relative z-10">
-            <p className="text-green-400 font-semibold mb-4 text-sm truncate text-center">✅ {linkedUser}</p>
-            {checkingProfile ? (
-              <p className="text-slate-200/70 text-sm animate-pulse mb-4 text-center">⏳ Cargando perfil...</p>
-            ) : profile && (
-              <div className="bg-white/10 p-4 rounded-xl mb-4 text-left">
-                <div className="flex items-center gap-3">
-                  <img src={profile.avatar} className="w-12 h-12 rounded-full border border-white/20" alt="Avatar" />
-                  <div className="overflow-hidden">
-                    <p className="font-bold truncate">{profile.displayName}</p>
-                    <p className="text-slate-200/70 text-xs truncate">@{profile.handle}</p>
-                  </div>
-                </div>
-                <div className="flex justify-between mt-4 text-slate-200/90 text-center">
-                  <div>
-                    <p className="font-bold">{profile.followers}</p>
-                    <p className="text-[10px] uppercase text-slate-200/60">Follows</p>
-                  </div>
-                  <div>
-                    <p className="font-bold">{profile.posts}</p>
-                    <p className="text-[10px] uppercase text-slate-200/60">Posts</p>
-                  </div>
-                </div>
-                <button onClick={handleRefresh} disabled={refreshDisabled} className={`mt-4 w-full py-2 rounded-lg text-sm font-semibold transition-all ${refreshDisabled ? "bg-white/10 opacity-50" : "bg-green-500 hover:bg-green-600"}`}>{refreshDisabled ? "⏳ Espera..." : "🔄 Actualizar"}</button>
-              </div>
-            )}
-            <button onClick={handleUnlink} disabled={loading} className="w-full bg-white/10 hover:bg-red-500/80 border border-white/20 py-2 rounded-lg text-sm transition">{loading ? "..." : "Desvincular"}</button>
-          </div>
-        ) : (
-          <div className="relative z-10">
-            <p className="text-sm text-slate-200/60 mb-4 text-center">Conecta mediante App Password.</p>
-            <input type="text" placeholder="Usuario" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className="w-full p-2 mb-2 text-sm rounded bg-black/20 border border-white/10 text-white" />
-            <input type="password" placeholder="App Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-2 mb-4 text-sm rounded bg-black/20 border border-white/10 text-white" />
-            <button onClick={handleCheckAndSave} disabled={loading} className="w-full bg-gradient-to-r from-sky-500 to-blue-600 py-2 rounded-lg font-semibold hover:opacity-90 transition">{loading ? "Verificando..." : "Conectar"}</button>
-          </div>
-        )}
-        {status && <p className="mt-4 text-xs text-slate-200/80 text-center relative z-10">{status}</p>}
+        {state.loading && <Spinner className="h-4 w-4 text-slate-500" />}
       </div>
 
-      {/* 2. FACEBOOK */}
-      <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
-            <Image src={FbIcon} alt="Facebook" width={120} height={120} />
-        </div>
-
-        <h2 className="text-2xl font-bold mb-4 flex items-center justify-center gap-2 relative z-10">Facebook</h2>
-        {fbCheckingStatus ? (
-          <p className="text-slate-200/70 text-sm animate-pulse text-center relative z-10">🔄 Verificando...</p>
-        ) : fbLinked ? (
-          <div className="relative z-10">
-            <p className="text-blue-300 font-semibold mb-4 text-sm truncate text-center">✅ {fbPageName}</p>
-            {fbCheckingProfile ? (
-              <p className="text-slate-200/70 text-sm animate-pulse mb-4 text-center">⏳ Cargando perfil...</p>
-            ) : fbProfile && (
-              <div className="bg-white/10 p-4 rounded-xl mb-4 text-left">
-                <div className="flex items-center gap-3">
-                  <img src={fbProfile.picture?.data?.url || "https://cdn-icons-png.flaticon.com/512/5968/5968764.png"} className="w-12 h-12 rounded-full border border-white/20" alt="FB" />
-                  <div className="overflow-hidden">
-                    <p className="font-bold truncate">{fbProfile.name}</p>
-                    <p className="text-slate-200/70 text-xs truncate">Página</p>
-                  </div>
+      <div className="flex-1">
+        {state.loading ? null : state.linked && state.expired ? (
+          <p className="text-sm text-slate-400">Por seguridad debes volver a autorizar {meta.label} para seguir publicando.</p>
+        ) : state.linked ? (
+          state.profileLoading && !state.profile ? (
+            <div className="h-16 animate-pulse rounded-xl bg-white/5" />
+          ) : (
+            <div className="rounded-xl border border-white/5 bg-black/20 p-3">
+              <div className="flex items-center gap-3">
+                <Avatar src={state.profile?.avatar} name={state.profile?.name || state.username} size={40} />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{state.profile?.name || state.username}</p>
+                  {state.profile?.handle && <p className="truncate text-xs text-slate-400">@{state.profile.handle.replace(/^@/, "")}</p>}
                 </div>
-                <div className="flex justify-between mt-4 text-slate-200/90 text-center">
-                  <div>
-                    <p className="font-bold">{fbProfile.followers_count ?? 0}</p>
-                    <p className="text-[10px] uppercase text-slate-200/60">Seguidores</p>
-                  </div>
-                  <div>
-                    <p className="font-bold">{fbProfile.fan_count ?? 0}</p>
-                    <p className="text-[10px] uppercase text-slate-200/60">Likes</p>
-                  </div>
-                </div>
-                <button onClick={handleFacebookRefresh} disabled={fbRefreshDisabled} className={`mt-4 w-full py-2 rounded-lg text-sm font-semibold transition-all ${fbRefreshDisabled ? "bg-white/10 opacity-50" : "bg-blue-600 hover:bg-blue-700"}`}>{fbRefreshDisabled ? "⏳ Espera..." : "🔄 Actualizar"}</button>
               </div>
-            )}
-            <button onClick={handleFacebookUnlink} disabled={fbLoading} className="w-full bg-white/10 hover:bg-red-500/80 border border-white/20 py-2 rounded-lg text-sm transition">{fbLoading ? "..." : "Desvincular"}</button>
-          </div>
-        ) : (
-          <div className="relative z-10">
-            <p className="text-sm text-slate-200/60 mb-6 text-center">Vincula una Página de Facebook.</p>
-            <button onClick={handleFacebookConnect} disabled={fbLoading} className="w-full bg-gradient-to-r from-blue-600 to-blue-800 py-3 rounded-lg font-semibold hover:opacity-90 transition shadow-lg">{fbLoading ? "Redirigiendo..." : "🔗 Conectar Página"}</button>
-          </div>
-        )}
-        {fbStatus && <p className="mt-4 text-xs text-slate-200/80 text-center relative z-10">{fbStatus}</p>}
-      </div>
-
-      {/* 3. INSTAGRAM */}
-      <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
-            <Image src={IgIcon} alt="Instagram" width={120} height={120} />
-        </div>
-
-        <h2 className="text-2xl font-bold mb-4 flex items-center justify-center gap-2 relative z-10">Instagram</h2>
-        {igCheckingStatus ? (
-          <p className="text-slate-200/70 text-sm animate-pulse text-center relative z-10">🔄 Verificando...</p>
-        ) : igLinked ? (
-          <div className="relative z-10">
-            <p className="text-pink-300 font-semibold mb-4 text-sm truncate text-center">✅ @{igUsername}</p>
-            {igCheckingProfile ? (
-              <p className="text-slate-200/70 text-sm animate-pulse mb-4 text-center">⏳ Cargando perfil...</p>
-            ) : igProfile && (
-              <div className="bg-white/10 p-4 rounded-xl mb-4 text-left">
-                <div className="flex items-center gap-3">
-                  <img src={igProfile.profilePictureUrl || "https://cdn-icons-png.flaticon.com/512/733/733558.png"} className="w-12 h-12 rounded-full border border-white/20" alt="IG" />
-                  <div className="overflow-hidden">
-                    <p className="font-bold truncate">@{igProfile.username}</p>
-                    <p className="text-slate-200/70 text-xs truncate">Instagram Business</p>
-                  </div>
-                </div>
-                <div className="flex justify-between mt-4 text-slate-200/90 text-center">
-                  <div>
-                    <p className="font-bold">{igProfile.followers?.toLocaleString()}</p>
-                    <p className="text-[10px] uppercase text-slate-200/60">Seguidores</p>
-                  </div>
-                  <div>
-                    <p className="font-bold">{igProfile.posts?.toLocaleString()}</p>
-                    <p className="text-[10px] uppercase text-slate-200/60">Posts</p>
-                  </div>
-                </div>
-                <button onClick={handleInstagramRefresh} disabled={igRefreshDisabled} className={`mt-4 w-full py-2 rounded-lg text-sm font-semibold transition-all ${igRefreshDisabled ? "bg-white/10 opacity-50" : "bg-pink-500 hover:bg-pink-600"}`}>{igRefreshDisabled ? "⏳ Espera..." : "🔄 Actualizar"}</button>
-              </div>
-            )}
-            <button onClick={handleInstagramUnlink} disabled={igLoading} className="w-full bg-white/10 hover:bg-red-500/80 border border-white/20 py-2 rounded-lg text-sm transition">{igLoading ? "..." : "Desvincular"}</button>
-          </div>
-        ) : (
-          <div className="relative z-10">
-            <p className="text-sm text-slate-200/60 mb-6 text-center">Conecta cuenta Profesional.</p>
-            <button onClick={handleInstagramConnect} disabled={igLoading} className="w-full bg-gradient-to-r from-pink-500 to-orange-500 py-3 rounded-lg font-semibold hover:opacity-90 transition shadow-lg">{igLoading ? "Redirigiendo..." : "🔗 Conectar IG"}</button>
-          </div>
-        )}
-        {igStatus && <p className="mt-4 text-xs text-slate-200/80 text-center relative z-10">{igStatus}</p>}
-      </div>
-
-      {/* 4. TIKTOK */}
-      <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
-            <Image src={TtIcon} alt="TikTok" width={120} height={120} />
-        </div>
-
-        <h2 className="text-2xl font-bold mb-4 flex items-center justify-center gap-2 relative z-10">TikTok</h2>
-        {ttCheckingStatus ? (
-          <p className="text-slate-200/70 text-sm animate-pulse text-center relative z-10">🔄 Verificando...</p>
-        ) : ttLinked ? (
-          <div className="relative z-10">
-            {ttExpired ? (
-                <div className="bg-red-500/10 border border-red-500/30 p-4 rounded-xl mb-4 text-center">
-                    <p className="text-red-200 font-bold text-sm mb-2">⚠️ Sesión Caducada</p>
-                    <p className="text-xs text-red-200/70 mb-4">Por seguridad, debes iniciar sesión nuevamente en TikTok.</p>
-                    <button onClick={handleTikTokConnect} className="w-full bg-red-600 hover:bg-red-500 text-white py-2 rounded-lg text-sm font-bold transition shadow-lg">🔄 Reconectar</button>
-                </div>
-            ) : (
-                <>
-                    <p className="text-slate-200 font-semibold mb-4 text-sm truncate text-center">✅ {ttUsername}</p>
-                    {ttCheckingProfile ? (
-                    <p className="text-slate-200/70 text-sm animate-pulse text-center mb-4">⏳ Cargando perfil...</p>
-                    ) : ttProfile && (
-                    <div className="bg-black/20 p-4 rounded-xl mb-4 text-left border border-white/5">
-                        <div className="flex items-center gap-3">
-                        <img src={ttProfile.avatar_url || "https://cdn-icons-png.flaticon.com/512/3046/3046121.png"} className="w-12 h-12 rounded-full border border-white/10" alt="TikTok" />
-                        <div className="overflow-hidden">
-                            <p className="font-bold truncate text-slate-200">{ttProfile.display_name}</p>
-                            <p className="text-slate-400 text-xs truncate">@{ttProfile.username}</p>
-                        </div>
-                        </div>
-                        <div className="flex justify-between mt-4 text-slate-300 text-center">
-                        <div>
-                            <p className="font-bold">{ttProfile.follower_count}</p>
-                            <p className="text-[10px] uppercase text-slate-500">Seguidores</p>
-                        </div>
-                        <div>
-                            <p className="font-bold">{ttProfile.likes_count}</p>
-                            <p className="text-[10px] uppercase text-slate-500">Likes</p>
-                        </div>
-                        </div>
-                        <button onClick={handleTikTokRefresh} disabled={ttRefreshDisabled} className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold transition-all ${ttRefreshDisabled ? "bg-white/5 text-slate-500" : "bg-white/10 hover:bg-white/20 text-white border border-white/10"}`}>{ttRefreshDisabled ? "⏳ Espera..." : "🔄 Actualizar datos"}</button>
+              {state.profile && (
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-center">
+                  {state.profile.stats.map((s) => (
+                    <div key={s.label} className="rounded-lg bg-white/[0.03] py-1.5">
+                      <dd className="text-sm font-semibold text-white">{s.value != null ? s.value.toLocaleString("es-CL") : "—"}</dd>
+                      <dt className="text-[11px] text-slate-500">{s.label}</dt>
                     </div>
-                    )}
-                </>
-            )}
-            <button onClick={handleTikTokUnlink} disabled={ttLoading} className="w-full bg-white/5 hover:bg-red-500/20 hover:text-red-200 text-slate-400 border border-white/10 py-2 rounded-lg text-sm transition">{ttLoading ? "..." : "Desvincular"}</button>
-          </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          )
+        ) : cfg.key === "BLUESKY" ? (
+          <form onSubmit={connectBluesky} className="space-y-3">
+            <Field label="Usuario" htmlFor="bsky-id">
+              <input id="bsky-id" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className={inputClass} placeholder="tu-usuario.bsky.social" autoComplete="username" />
+            </Field>
+            <Field label="App Password" htmlFor="bsky-pass" hint={<>Créala en Bluesky → Configuración → <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noreferrer" className="text-indigo-300 hover:underline">App Passwords</a>.</>} error={bskyError}>
+              <input id="bsky-pass" type="password" value={appPassword} onChange={(e) => setAppPassword(e.target.value)} className={inputClass} placeholder="xxxx-xxxx-xxxx-xxxx" autoComplete="off" />
+            </Field>
+            <Button type="submit" className="w-full" loading={busy} disabled={!identifier || !appPassword}>Conectar Bluesky</Button>
+          </form>
         ) : (
-          <div className="relative z-10">
-            <p className="text-sm text-slate-200/60 mb-6 text-center">Sincroniza tu cuenta de TikTok.</p>
-            <button onClick={handleTikTokConnect} disabled={ttLoading} className="w-full bg-gradient-to-r from-black to-gray-800 border border-white/20 py-3 rounded-lg font-semibold hover:opacity-90 transition shadow-lg text-white">{ttLoading ? "Redirigiendo..." : "🔗 Conectar TikTok"}</button>
-          </div>
+          <p className="text-sm text-slate-400">{cfg.description}</p>
         )}
-        {ttStatus && <p className="mt-4 text-xs text-slate-200/80 text-center relative z-10">{ttStatus}</p>}
       </div>
 
-      {/* 5. X (TWITTER) 🆕 */}
-      <div className="relative overflow-hidden bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-8 shadow-xl">
-        <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none select-none">
-            <Image src={XIcon} alt="X" width={120} height={120} />
-        </div>
-
-        <h2 className="text-2xl font-bold mb-4 flex items-center justify-center gap-2 relative z-10">X (Twitter)</h2>
-        {xCheckingStatus ? (
-          <p className="text-slate-200/70 text-sm animate-pulse text-center relative z-10">🔄 Verificando...</p>
-        ) : xLinked ? (
-          <div className="relative z-10">
-            {xExpired ? (
-                <div className="bg-red-500/10 border border-red-500/30 p-4 rounded-xl mb-4 text-center">
-                    <p className="text-red-200 font-bold text-sm mb-2">⚠️ Sesión Caducada</p>
-                    <p className="text-xs text-red-200/70 mb-4">La conexión con X expiró. Por favor, reconecta.</p>
-                    <button onClick={handleXConnect} className="w-full bg-red-600 hover:bg-red-500 text-white py-2 rounded-lg text-sm font-bold transition shadow-lg">🔄 Reconectar</button>
-                </div>
+      {!state.loading && (
+        <div className="mt-4 flex gap-2">
+          {state.linked && state.expired && <Button className="flex-1" onClick={connect} loading={busy}>Reconectar</Button>}
+          {!state.linked && cfg.key !== "BLUESKY" && <Button className="flex-1" onClick={connect} loading={busy}>Conectar {meta.label}</Button>}
+          {state.linked && !state.expired && (
+            <Button variant="secondary" size="sm" className="flex-1" onClick={refresh} disabled={refreshCooldown || state.profileLoading}>
+              {refreshCooldown ? "Actualizado" : "Actualizar datos"}
+            </Button>
+          )}
+          {state.linked &&
+            (confirmUnlink ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmUnlink(false)}>Cancelar</Button>
+                <Button variant="danger" size="sm" onClick={unlink} loading={busy}>Confirmar</Button>
+              </>
             ) : (
-                <>
-                    <p className="text-slate-200 font-semibold mb-4 text-sm truncate text-center">✅ @{xUsername}</p>
-                    {xCheckingProfile ? (
-                    <p className="text-slate-200/70 text-sm animate-pulse text-center mb-4">⏳ Cargando perfil...</p>
-                    ) : xProfile && (
-                    <div className="bg-black/20 p-4 rounded-xl mb-4 text-left border border-white/5">
-                        <div className="flex items-center gap-3">
-                        <img src={xProfile.avatar || "https://cdn-icons-png.flaticon.com/512/3670/3670151.png"} className="w-12 h-12 rounded-full border border-white/10" alt="X" />
-                        <div className="overflow-hidden">
-                            <p className="font-bold truncate text-slate-200">{xProfile.name}</p>
-                            <p className="text-slate-400 text-xs truncate">@{xProfile.username}</p>
-                        </div>
-                        </div>
-                        <div className="flex justify-between mt-4 text-slate-300 text-center">
-                        <div>
-                            <p className="font-bold">{xProfile.followers?.toLocaleString()}</p>
-                            <p className="text-[10px] uppercase text-slate-500">Seguidores</p>
-                        </div>
-                        <div>
-                            <p className="font-bold">{xProfile.tweets?.toLocaleString()}</p>
-                            <p className="text-[10px] uppercase text-slate-500">Tweets</p>
-                        </div>
-                        </div>
-                        <button onClick={handleXRefresh} disabled={xRefreshDisabled} className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold transition-all ${xRefreshDisabled ? "bg-white/5 text-slate-500" : "bg-white/10 hover:bg-white/20 text-white border border-white/10"}`}>{xRefreshDisabled ? "⏳ Espera..." : "🔄 Actualizar datos"}</button>
-                    </div>
-                    )}
-                </>
-            )}
-            <button onClick={handleXUnlink} disabled={xLoading} className="w-full bg-white/5 hover:bg-red-500/20 hover:text-red-200 text-slate-400 border border-white/10 py-2 rounded-lg text-sm transition">{xLoading ? "..." : "Desvincular"}</button>
-          </div>
-        ) : (
-          <div className="relative z-10">
-            <p className="text-sm text-slate-200/60 mb-6 text-center">Conecta tu cuenta de X.</p>
-            <button onClick={handleXConnect} disabled={xLoading} className="w-full bg-white border border-white/20 py-3 rounded-lg font-semibold hover:bg-slate-200 transition shadow-lg text-black">{xLoading ? "Redirigiendo..." : "🔗 Conectar X"}</button>
-          </div>
-        )}
-        {xStatus && <p className="mt-4 text-xs text-slate-200/80 text-center relative z-10">{xStatus}</p>}
-      </div>
-
-    </div>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmUnlink(true)}>Desconectar</Button>
+            ))}
+        </div>
+      )}
+    </Card>
   );
 }

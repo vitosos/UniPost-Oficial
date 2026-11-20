@@ -1,17 +1,18 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { normalizeEmail, readJson } from "@/lib/validation";
 
+// Indica si un correo ya fue verificado. Para correos inexistentes responde "no verificado"
+// (en vez de 404) para no revelar qué cuentas existen.
 export async function POST(req: Request) {
-  const { email } = await req.json();
+  const { email: rawEmail } = await readJson<{ email: string }>(req);
+  const email = normalizeEmail(rawEmail);
+  if (!email) return NextResponse.json({ ok: false, error: "INVALID_EMAIL" }, { status: 400 });
 
-  // Verificar si el correo está verificado en la base de datos
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
+    select: { emailVerified: true },
+  });
 
-  if (!user) {
-    return NextResponse.json({ ok: false, error: "USER_NOT_FOUND" }, { status: 404 });
-  }
-
-  const isVerified = user.emailVerified !== null; // Verificar si está verificado
-
-  return NextResponse.json({ ok: true, isVerified });
+  return NextResponse.json({ ok: true, isVerified: Boolean(user?.emailVerified) });
 }

@@ -18,7 +18,11 @@ export async function GET() {
       },
       orderBy: { id: "desc" }, // Los más recientes primero
       take: 50,
-      include: {
+      select: {
+        id: true,
+        network: true,
+        uri: true,
+        permalink: true,
         post: {
           select: {
             title: true,

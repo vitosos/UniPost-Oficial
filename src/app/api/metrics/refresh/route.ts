@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 type RemoteMetric = {
   id: string;       
@@ -35,7 +36,7 @@ function getIGShortcode(url?: string | null) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession();
+    const session = await getServerSession(authOptions);
     if (!session?.user?.email) return NextResponse.json({ ok: false }, { status: 401 });
 
     // 1. Obtener usuario solicitante
@@ -105,7 +106,7 @@ export async function POST(req: NextRequest) {
     const fbMap = new Map<string, RemoteMetric>();
     const xMap = new Map<string, RemoteMetric>();
 
-    if (bskyData.ok) bskyData.posts?.forEach((p: any) => bskyMap.set(p.uri, { id: p.uri, likes: p.likes, comments: p.comments, shares: p.shares, views: p.views, createdAt: p.createdAt }));
+    if (bskyData.ok) bskyData.posts?.forEach((p: any) => bskyMap.set(p.uri, { id: p.uri, likes: p.likes, comments: p.replies ?? 0, shares: p.reposts ?? 0, views: p.views, createdAt: p.createdAt }));
     
     if (igData.ok) igData.posts?.forEach((p: any) => { 
         const m = { id: p.id, permalink: p.permalink, likes: p.likes, comments: p.comments, shares: 0, views: 0, createdAt: p.createdAt }; 

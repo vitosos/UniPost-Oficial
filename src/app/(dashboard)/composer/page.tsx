@@ -1,597 +1,530 @@
 "use client";
 
-import { useState, useEffect, type ChangeEvent } from "react";
-import { useSession, signOut } from "next-auth/react";
-import toast from "react-hot-toast";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import Link from "next/link";
+import toast from "react-hot-toast";
+import { NETWORKS, NETWORK_KEYS, type NetworkKey } from "@/lib/networks";
+import { Alert, Button, ButtonLink, Card, Field, LoadingState, PageHeader, inputClass } from "@/components/ui";
 
 // --- TIPOS ---
-type Variant = {
-  network: string;
-  text: string;
-};
+type NewMedia = { id: string; file: File; previewUrl: string; type: "image" | "video" };
+type UserConnections = Partial<Record<NetworkKey, { connected: boolean; username?: string }>>;
 
-type NewMedia = {
-  id: string;
-  file: File;
-  previewUrl: string;
-  base64: string;
-  type: "image" | "video";
-  order: number;
-};
-
-type NetworkConnection = {
-  connected: boolean;
-  username?: string;
-};
-
-type UserConnections = {
-  [key: string]: NetworkConnection;
-};
-
-const ALL_POSSIBLE_NETWORKS = ["INSTAGRAM", "BLUESKY", "FACEBOOK", "TIKTOK", "TWITTER"] as const;
 const CATEGORIES = ["Ilustración", "Evento", "Emprendimiento", "Entretenimiento", "Otro"];
-
-// 1. 🆕 LÍMITES DE CARACTERES
-const CHAR_LIMITS: Record<string, number> = {
-  TWITTER: 280,
-  BLUESKY: 300,
-  INSTAGRAM: 2200,
-  TIKTOK: 2200,
-  FACEBOOK: 63206, // Prácticamente ilimitado
-};
+const MAX_IMAGE_MB = 8;
+const MAX_VIDEO_MB = 100;
 
 const TIMEZONES = [
-  { label: "Santiago / Buenos Aires", id: "America/Santiago" },
+  { label: "Santiago", id: "America/Santiago" },
+  { label: "Buenos Aires", id: "America/Argentina/Buenos_Aires" },
   { label: "Bogotá / Lima / Quito", id: "America/Bogota" },
   { label: "Ciudad de México", id: "America/Mexico_City" },
   { label: "Caracas / La Paz", id: "America/Caracas" },
   { label: "Nueva York / Miami", id: "America/New_York" },
-  { label: "Los Angeles (Pacific)", id: "America/Los_Angeles" },
+  { label: "Los Ángeles", id: "America/Los_Angeles" },
   { label: "Madrid / París / Roma", id: "Europe/Madrid" },
   { label: "Londres / Lisboa", id: "Europe/London" },
-  { label: "UTC (Universal)", id: "UTC" },
   { label: "Tokio", id: "Asia/Tokyo" },
+  { label: "UTC", id: "UTC" },
 ];
 
+// --- HELPERS ---
+
+/** Diferencia (ms) entre la hora local de `timeZone` y UTC en un instante dado. */
+function zoneOffsetMs(instant: number, timeZone: string) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(new Date(instant))
+      .map((p) => [p.type, p.value])
+  );
+  const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return asUtc - instant;
+}
+
+/** Convierte "fecha + hora de pared en una zona" a un Date UTC (correcto también con cambio de horario). */
+function zonedTimeToUtc(date: string, time: string, timeZone: string): Date {
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  const wall = Date.UTC(y, m - 1, d, hh, mm);
+  let utc = wall - zoneOffsetMs(wall, timeZone);
+  utc = wall - zoneOffsetMs(utc, timeZone);
+  return new Date(utc);
+}
+
+function computeRules(networks: NetworkKey[]) {
+  let maxImages = 10;
+  let allowMix = true;
+  let minMedia = 0;
+  let videoOnly = false;
+  if (networks.includes("TIKTOK")) { maxImages = 0; minMedia = 1; allowMix = false; videoOnly = true; }
+  if (networks.includes("BLUESKY") || networks.includes("TWITTER")) { maxImages = Math.min(maxImages, 4); allowMix = false; }
+  if (networks.includes("INSTAGRAM")) minMedia = Math.max(minMedia, 1);
+  return { maxImages, maxVideos: 1, allowMix, minMedia, videoOnly };
+}
+
+// --- PÁGINA ---
+
 export default function ComposerPage() {
-  const { data: session } = useSession();
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Estados Formulario
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [category, setCategory] = useState("Otro");
-  const [visible, setVisible] = useState(false);
-
-  // Estados de Conexión
   const [connections, setConnections] = useState<UserConnections>({});
   const [loadingConnections, setLoadingConnections] = useState(true);
-  
-  const [variants, setVariants] = useState<Variant[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [medias, setMedias] = useState<NewMedia[]>([]);
 
-  // Estados Scheduler
-  const [agendar, setAgendar] = useState(false);
+  const [selected, setSelected] = useState<NetworkKey[]>([]);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [customTexts, setCustomTexts] = useState<Partial<Record<NetworkKey, string>>>({});
+  const [activeCustomTab, setActiveCustomTab] = useState<NetworkKey | null>(null);
+  const [category, setCategory] = useState("Otro");
+  const [visible, setVisible] = useState(false);
+  const [medias, setMedias] = useState<NewMedia[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+
+  const [scheduleMode, setScheduleMode] = useState<"draft" | "schedule">("draft");
   const [fecha, setFecha] = useState("");
   const [hora, setHora] = useState("12:00");
   const [zona, setZona] = useState("America/Santiago");
-  const [now, setNow] = useState(new Date());
+  const [previewNetwork, setPreviewNetwork] = useState<NetworkKey | null>(null);
 
-  // Cargar conexiones
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  // Cargar conexiones y zona horaria del navegador
   useEffect(() => {
-    async function fetchConnections() {
-        try {
-            const res = await fetch("/api/users/connections");
-            const data = await res.json();
-            if (data.ok) {
-                setConnections(data.connections);
-                const available = ALL_POSSIBLE_NETWORKS.filter(net => data.connections[net]?.connected);
-                if (available.length > 0) {
-                    setVariants([{ network: available[0], text: "" }]);
-                } else {
-                    setVariants([]); 
-                }
-            }
-        } catch (e) {
-            console.error("Error fetching connections", e);
-        } finally {
-            setLoadingConnections(false);
-        }
-    }
-    fetchConnections();
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const getTimeInZone = (zoneId: string) => {
     try {
-      return new Intl.DateTimeFormat("es-CL", {
-        timeZone: zoneId, hour: "2-digit", minute: "2-digit", hour12: false,
-      }).format(now);
-    } catch (e) { return "--:--"; }
-  };
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) setZona(tz);
+    } catch {}
 
-  // --- RESTRICCIONES DE MEDIA ---
-  const calculateRestrictions = () => {
-    const networks = variants.map(v => v.network);
-    let maxImages = 10;
-    let maxVideos = 1;
-    let allowMix = true;
-    let minMedia = 0;
+    fetch("/api/users/connections")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.ok) return;
+        setConnections(data.connections);
+        const first = NETWORK_KEYS.find((n) => data.connections[n]?.connected);
+        if (first) setSelected([first]);
+      })
+      .catch(() => toast.error("No se pudieron cargar tus cuentas conectadas"))
+      .finally(() => setLoadingConnections(false));
+  }, []);
 
-    if (networks.includes("TIKTOK")) {
-      maxImages = 0; 
-      minMedia = Math.max(minMedia, 1); 
-      allowMix = false;
+  // Liberar las URLs de previsualización al desmontar
+  const mediasRef = useRef(medias);
+  mediasRef.current = medias;
+  useEffect(() => () => mediasRef.current.forEach((m) => URL.revokeObjectURL(m.previewUrl)), []);
+
+  const connectedNetworks = NETWORK_KEYS.filter((n) => connections[n]?.connected);
+  const rules = useMemo(() => computeRules(selected), [selected]);
+  const imageCount = medias.filter((m) => m.type === "image").length;
+  const videoCount = medias.filter((m) => m.type === "video").length;
+  const textFor = (n: NetworkKey) => customTexts[n]?.trim() ? customTexts[n]! : body;
+
+  // Mantener las pestañas sincronizadas con las redes seleccionadas
+  useEffect(() => {
+    if (!activeCustomTab || !selected.includes(activeCustomTab)) setActiveCustomTab(selected[0] ?? null);
+    if (!previewNetwork || !selected.includes(previewNetwork)) setPreviewNetwork(selected[0] ?? null);
+  }, [selected, activeCustomTab, previewNetwork]);
+
+  // --- VALIDACIÓN (lista de problemas que bloquean el envío) ---
+  const issues = useMemo(() => {
+    const list: string[] = [];
+    if (selected.length === 0) list.push("Elige al menos una red social.");
+    if (!title.trim()) list.push("Agrega un título interno.");
+    if (!body.trim() && selected.some((n) => !customTexts[n]?.trim())) list.push("Escribe el texto de la publicación.");
+    for (const n of selected) {
+      const len = textFor(n).length;
+      if (len > NETWORKS[n].charLimit) list.push(`El texto para ${NETWORKS[n].label} supera ${NETWORKS[n].charLimit} caracteres (${len}).`);
     }
-    if (networks.includes("BLUESKY")) {
-      maxImages = Math.min(maxImages, 4);
-      allowMix = false;
+    if (medias.length < rules.minMedia) list.push(`${selected.includes("TIKTOK") ? "TikTok requiere un video" : "Instagram requiere al menos una imagen o video"}.`);
+    if (imageCount > rules.maxImages) list.push(rules.maxImages === 0 ? "TikTok no admite imágenes: quita las imágenes o desmarca TikTok." : `Máximo ${rules.maxImages} imágenes para las redes elegidas.`);
+    if (videoCount > rules.maxVideos) list.push("Solo se permite 1 video.");
+    if (!rules.allowMix && imageCount > 0 && videoCount > 0) list.push("Las redes elegidas no permiten mezclar fotos y videos.");
+    if (scheduleMode === "schedule") {
+      if (!fecha || !hora) list.push("Elige fecha y hora para programar.");
+      else if (zonedTimeToUtc(fecha, hora, zona).getTime() <= Date.now() + 60_000) list.push("La fecha programada debe ser futura.");
     }
-    if (networks.includes("TWITTER")) {
-        maxImages = Math.min(maxImages, 4); 
-        allowMix = false; 
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, title, body, customTexts, medias, rules, imageCount, videoCount, scheduleMode, fecha, hora, zona]);
+
+  // --- MULTIMEDIA ---
+  function addFiles(files: FileList | File[]) {
+    let current = [...medias];
+    for (const file of Array.from(files)) {
+      const isVideo = file.type.startsWith("video/");
+      const isImage = file.type.startsWith("image/");
+      if (!isVideo && !isImage) { toast.error(`"${file.name}" no es una imagen ni un video.`); continue; }
+      const maxMb = isVideo ? MAX_VIDEO_MB : MAX_IMAGE_MB;
+      if (file.size > maxMb * 1024 * 1024) { toast.error(`"${file.name}" supera ${maxMb} MB.`); continue; }
+      if (isImage && rules.maxImages === 0) { toast.error("TikTok solo admite video."); continue; }
+      if (isImage && current.filter((m) => m.type === "image").length >= rules.maxImages) { toast.error(`Máximo ${rules.maxImages} imágenes para las redes elegidas.`); continue; }
+      if (isVideo && current.some((m) => m.type === "video")) { toast.error("Solo se permite 1 video."); continue; }
+      if (!rules.allowMix && current.some((m) => m.type !== (isVideo ? "video" : "image"))) { toast.error("Las redes elegidas no permiten mezclar fotos y videos."); continue; }
+      current = [...current, { id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file), type: isVideo ? "video" : "image" }];
     }
-    if (networks.includes("INSTAGRAM")) {
-      minMedia = Math.max(minMedia, 1);
-    }
-
-    return { maxImages, maxVideos, allowMix, minMedia };
-  };
-
-  const restrictions = calculateRestrictions();
-
-  // 2. 🆕 VALIDACIÓN DE LONGITUD DE TEXTO
-  const checkTextLimits = () => {
-    for (const v of variants) {
-        const limit = CHAR_LIMITS[v.network] || 2000;
-        // Si el texto de la variante está vacío, usa el body principal
-        const effectiveLength = (v.text || body).length;
-        if (effectiveLength > limit) {
-            return { ok: false, network: v.network, limit };
-        }
-    }
-    return { ok: true };
-  };
-
-  function canAddMedia(file: File, currentMedias: NewMedia[]) {
-    const isVideo = file.type.startsWith("video");
-    const isImage = file.type.startsWith("image");
-
-    if (!isVideo && !isImage) return { ok: false, reason: "Archivo no soportado." };
-
-    const imageCount = currentMedias.filter(m => m.type === "image").length + (isImage ? 1 : 0);
-    const videoCount = currentMedias.filter(m => m.type === "video").length + (isVideo ? 1 : 0);
-
-    if (isImage && imageCount > restrictions.maxImages) return { ok: false, reason: `Límite de imágenes excedido (${restrictions.maxImages}).` };
-    if (isVideo && videoCount > restrictions.maxVideos) return { ok: false, reason: `Límite de videos excedido (${restrictions.maxVideos}).` };
-
-    if (!restrictions.allowMix) {
-      const hasImages = currentMedias.some(m => m.type === "image") || isImage;
-      const hasVideos = currentMedias.some(m => m.type === "video") || isVideo;
-      if (hasImages && hasVideos) return { ok: false, reason: "Las redes seleccionadas no permiten mezclar fotos y videos." };
-    }
-
-    return { ok: true };
+    setMedias(current);
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const selected = e.target.files?.[0];
-    if (!selected) return;
-
-    const check = canAddMedia(selected, medias);
-    if (!check.ok) {
-      toast.error(check.reason || "Error");
-      e.target.value = "";
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64 = reader.result as string;
-      const isVideo = selected.type.startsWith("video");
-      const newMedia: NewMedia = {
-        id: crypto.randomUUID(),
-        file: selected,
-        previewUrl: URL.createObjectURL(selected),
-        base64,
-        type: isVideo ? "video" : "image",
-        order: medias.length,
-      };
-      setMedias((prev) => [...prev, newMedia]);
-      e.target.value = "";
-    };
-    reader.readAsDataURL(selected);
-  }
-
-  function moveMedia(index: number, direction: "left" | "right") {
+  function moveMedia(index: number, delta: -1 | 1) {
     setMedias((prev) => {
-      const newIndex = index + (direction === "left" ? -1 : 1);
-      if (newIndex < 0 || newIndex >= prev.length) return prev;
+      const target = index + delta;
+      if (target < 0 || target >= prev.length) return prev;
       const arr = [...prev];
-      const temp = arr[index]; arr[index] = arr[newIndex]; arr[newIndex] = temp;
-      return arr.map((m, idx) => ({ ...m, order: idx }));
+      [arr[index], arr[target]] = [arr[target], arr[index]];
+      return arr;
     });
   }
 
-  function removeMedia(index: number) {
+  function removeMedia(id: string) {
     setMedias((prev) => {
-      const arr = prev.filter((_, i) => i !== index);
-      return arr.map((m, idx) => ({ ...m, order: idx }));
+      const m = prev.find((x) => x.id === id);
+      if (m) URL.revokeObjectURL(m.previewUrl);
+      return prev.filter((x) => x.id !== id);
     });
   }
 
+  function toggleNetwork(n: NetworkKey) {
+    setSelected((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n]));
+  }
+
+  const readAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  // --- ENVÍO ---
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
-
-    // Validar media
-    if (medias.length < restrictions.minMedia) {
-      toast.error(`Debes subir al menos ${restrictions.minMedia} archivo(s) para continuar.`);
-      setLoading(false);
+    setSubmitted(true);
+    if (issues.length > 0) {
+      toast.error("Revisa los puntos pendientes antes de continuar.");
       return;
     }
-
-    // Validar textos
-    const textCheck = checkTextLimits();
-    if (!textCheck.ok) {
-        toast.error(`El texto para ${textCheck.network} excede el límite de ${textCheck.limit} caracteres.`);
-        setLoading(false);
-        return;
+    setSubmitting(true);
+    try {
+      const encoded = await Promise.all(medias.map(async (m, order) => ({ base64: await readAsDataUrl(m.file), type: m.type, order })));
+      const res = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          body,
+          category,
+          visible,
+          variants: selected.map((n) => ({ network: n, text: customTexts[n]?.trim() ? customTexts[n] : "" })),
+          medias: encoded,
+          schedule: scheduleMode === "schedule" ? { runAt: zonedTimeToUtc(fecha, hora, zona).toISOString(), timezone: zona } : null,
+        }),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "No se pudo guardar");
+      toast.success(scheduleMode === "schedule" ? "Publicación programada 📅" : "Borrador guardado. Publícalo desde Publicaciones.");
+      router.push("/publicaciones");
+    } catch (err) {
+      toast.error((err as Error).message || "Error al guardar");
+      setSubmitting(false);
     }
-
-    let schedulePayload = null;
-    if (agendar) {
-      if (!fecha || !hora) { toast.error("⚠️ Faltan fecha y hora."); setLoading(false); return; }
-      try {
-        const targetDateStr = `${fecha}T${hora}:00`;
-        const offset = getOffsetForZone(zona);
-        const finalIsoString = `${targetDateStr}${offset}`;
-        const dateCheck = new Date(finalIsoString);
-        if (isNaN(dateCheck.getTime())) throw new Error("Fecha inválida");
-        if (dateCheck <= new Date()) { toast.error("⚠️ Fecha debe ser futura."); setLoading(false); return; }
-        schedulePayload = { runAt: dateCheck.toISOString(), timezone: zona };
-      } catch (err) { toast.error("Error al calcular fecha."); setLoading(false); return; }
-    }
-
-    const payload = {
-      organizationId: 1,
-      title,
-      body,
-      category,
-      visible,
-      variants,
-      medias: medias.sort((a, b) => a.order - b.order).map((m) => ({
-        base64: m.base64, type: m.type, order: m.order,
-      })),
-      schedule: schedulePayload,
-    };
-
-    const res = await fetch("/api/posts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const json = await res.json();
-
-    if (json.ok) {
-      toast.success(agendar ? "📅 Agendado correctamente" : "✅ Creado correctamente");
-      setTitle(""); setBody(""); setMedias([]); setAgendar(false); setFecha("");
-      setCategory("Otro"); setVisible(false);
-      
-      const firstAvailable = ALL_POSSIBLE_NETWORKS.find(net => connections[net]?.connected);
-      setVariants(firstAvailable ? [{ network: firstAvailable, text: "" }] : []);
-    } else {
-      toast.error("❌ Error: " + (json.error || "Fallo al crear"));
-    }
-    setLoading(false);
   }
 
-  function getOffsetForZone(timeZone: string): string {
-    const date = new Date();
-    const timeString = date.toLocaleString('en-US', { timeZone, timeZoneName: 'shortOffset' });
-    const offsetPart = timeString.split('GMT')[1];
-    if (!offsetPart) return "Z";
-    let [hours, minutes] = offsetPart.split(':');
-    if (!minutes) minutes = "00";
-    const sign = hours.includes('-') ? '-' : '+';
-    hours = hours.replace('+', '').replace('-', '').padStart(2, '0');
-    return `${sign}${hours}:${minutes}`;
+  if (loadingConnections) return <LoadingState label="Cargando tus cuentas..." />;
+
+  if (connectedNetworks.length === 0) {
+    return (
+      <div className="mx-auto max-w-2xl">
+        <PageHeader title="Crear publicación" />
+        <Card className="p-8 text-center">
+          <div className="mb-3 text-4xl" aria-hidden="true">🔗</div>
+          <h2 className="text-xl font-semibold text-white">Primero conecta una red social</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-slate-400">Para crear publicaciones necesitas enlazar al menos una cuenta (Instagram, Facebook, X, Bluesky o TikTok).</p>
+          <ButtonLink href="/perfil" className="mt-6">Conectar mis cuentas</ButtonLink>
+        </Card>
+      </div>
+    );
   }
 
-  function removeVariant(index: number) {
-    setVariants(variants.filter((_, i) => i !== index));
-  }
-
-  const updateVariant = (index: number, field: keyof Variant, value: any) => {
-    const newVariants = [...variants];
-    // @ts-ignore
-    newVariants[index][field] = value;
-    setVariants(newVariants);
-  };
-
-  const availableNetworks = ALL_POSSIBLE_NETWORKS.filter(net => 
-    connections[net]?.connected === true && 
-    !variants.some(v => v.network === net)  
-  );
-
-  const hasAnyConnection = Object.values(connections).some(c => c.connected);
-  
-  // Estado para bloquear botón si hay errores de texto en tiempo real
-  const isTextInvalid = !checkTextLimits().ok;
-
-  if (loadingConnections) {
-      return <div className="min-h-screen flex items-center justify-center text-white">Cargando perfiles...</div>;
-  }
+  const previewText = previewNetwork ? textFor(previewNetwork) : body;
+  const tightest = selected.length ? selected.reduce((a, b) => (NETWORKS[a].charLimit < NETWORKS[b].charLimit ? a : b)) : null;
+  const scheduledDate = scheduleMode === "schedule" && fecha && hora ? zonedTimeToUtc(fecha, hora, zona) : null;
 
   return (
-    <div className="max-w-6xl mx-auto">
-      {session && (
-        <div className="flex justify-between items-center mb-6">
-          <p>👋 Hola, <span className="font-bold">{session.user?.name}</span></p>
-          <div className="flex gap-3">
-            <a href="/publicaciones" className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm transition">📂 Biblioteca</a>
-            <a href="/perfil" className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm transition">👤 Perfil</a>
-            <button onClick={() => signOut({ callbackUrl: "/" })} className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm transition">🚪 Salir</button>
-          </div>
-        </div>
-      )}
+    <div className="mx-auto max-w-6xl">
+      <PageHeader title="Crear publicación" description="Escribe una vez y adáptala a cada red. Puedes guardarla como borrador o programarla." />
 
-      <h1 className="text-4xl font-bold mb-8 text-center tracking-tight">Crear nueva publicación</h1>
+      <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="space-y-6">
+          {/* 1. Redes */}
+          <Card className="p-5 sm:p-6">
+            <SectionTitle step={1} title="¿Dónde quieres publicar?" />
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Redes sociales">
+              {NETWORK_KEYS.map((n) => {
+                const meta = NETWORKS[n];
+                const conn = connections[n];
+                const isOn = selected.includes(n);
+                if (!conn?.connected) {
+                  return (
+                    <Link key={n} href="/perfil" className="flex items-center gap-2 rounded-xl border border-dashed border-white/10 px-3 py-2 text-sm text-slate-500 hover:border-white/25 hover:text-slate-300" title={`Conectar ${meta.label}`}>
+                      <Image src={meta.icon} alt="" width={18} height={18} className="h-[18px] w-[18px] opacity-40 grayscale" />
+                      {meta.label}
+                      <span className="text-xs">+ Conectar</span>
+                    </Link>
+                  );
+                }
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => toggleNetwork(n)}
+                    aria-pressed={isOn}
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${isOn ? "border-indigo-400/60 bg-indigo-500/15 text-white" : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25"}`}
+                  >
+                    <Image src={meta.icon} alt="" width={18} height={18} className="h-[18px] w-[18px]" />
+                    <span>{meta.label}</span>
+                    {conn.username && <span className="hidden text-xs text-slate-400 sm:inline">@{conn.username.replace(/^@/, "")}</span>}
+                    <span aria-hidden="true" className={`ml-1 flex h-4 w-4 items-center justify-center rounded-full border text-[10px] ${isOn ? "border-indigo-300 bg-indigo-400 text-slate-950" : "border-slate-500"}`}>{isOn ? "✓" : ""}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
 
-      {!hasAnyConnection ? (
-        <div className="bg-red-500/10 border border-red-500/20 p-8 rounded-2xl text-center">
-            <h2 className="text-xl font-bold text-red-200 mb-2">¡Aún no has enlazado tus cuentas!</h2>
-            <p className="text-slate-300 mb-6">Para crear publicaciones, primero debes conectar al menos una red social.</p>
-            <Link 
-                href="/perfil"
-                className="bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-lg font-bold transition shadow-lg"
+          {/* 2. Contenido */}
+          <Card className="space-y-5 p-5 sm:p-6">
+            <SectionTitle step={2} title="Contenido" />
+            <Field label="Título interno" htmlFor="title" hint="Solo lo ves tú, para encontrar la publicación después.">
+              <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} className={inputClass} placeholder="Ej: Lanzamiento colección verano" aria-invalid={submitted && !title.trim()} />
+            </Field>
+
+            <Field
+              label="Texto de la publicación"
+              htmlFor="body"
+              aside={tightest && <CharCounter count={body.length} limit={NETWORKS[tightest].charLimit} label={NETWORKS[tightest].label} />}
+              hint="Se usa en todas las redes, salvo que lo personalices más abajo."
             >
-                Ir a mi Perfil y Conectar
-            </Link>
-        </div>
-      ) : (
-        <div className="flex flex-col lg:flex-row gap-8">
+              <textarea id="body" value={body} onChange={(e) => setBody(e.target.value)} rows={6} className={`${inputClass} resize-y`} placeholder="¿Qué quieres compartir? Puedes usar #hashtags" />
+            </Field>
 
-            <div className="flex-1 backdrop-blur-xl bg-white/5 border border-white/10 p-8 rounded-2xl shadow-2xl">
-            <form onSubmit={handleSubmit} className="space-y-6">
-
-                <div className="space-y-4">
-                <input
-                    className="w-full p-4 rounded-xl bg-black/20 border border-white/10 text-slate-200 placeholder-white/40 focus:bg-black/40 outline-none"
-                    placeholder="Título interno..."
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    required
-                />
-
-                <div className="flex flex-col md:flex-row gap-4">
-                    <div className="flex-1">
-                    <textarea
-                        className="w-full p-4 rounded-xl bg-black/20 border border-white/10 text-slate-200 placeholder-white/40 focus:bg-black/40 outline-none h-40 resize-none"
-                        placeholder="Texto principal (se usará por defecto en todas las redes)..."
-                        value={body}
-                        onChange={(e) => setBody(e.target.value)}
-                        required
-                    />
-                    {/* Contador Global (referencial) */}
-                    <div className="text-right text-xs text-slate-500 mt-1">
-                        Caracteres: {body.length}
-                    </div>
-                    </div>
-
-                    <div className="md:w-64 flex flex-col gap-4 bg-black/20 p-4 rounded-xl border border-white/5">
-                    <div className="flex flex-col gap-2">
-                        <label className="text-xs font-bold text-slate-400 uppercase">Categoría</label>
-                        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full p-2 rounded-lg bg-white/10 border border-white/10 text-slate-200 text-sm focus:bg-black/40 outline-none">
-                        {CATEGORIES.map(cat => <option key={cat} value={cat} className="bg-gray-900 text-slate-200">{cat}</option>)}
-                        </select>
-                    </div>
-
-                    <div className="flex flex-col gap-2">
-                        <label className="text-xs font-bold text-slate-400 uppercase">Visibilidad</label>
-                        <div className="flex items-center gap-2 relative group">
-                        <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-200 select-none">
-                            <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} className="w-4 h-4 accent-green-500 rounded" />
-                            Mostrar en Feed
-                        </label>
-                        <div className="bg-white/20 text-slate-200/80 rounded-full w-4 h-4 flex items-center justify-center text-xs cursor-help font-serif italic transition hover:bg-white/40 hover:text-white">i</div>
-                        <div className="absolute top-full right-0 mt-2 w-72 bg-slate-900 border border-white/20 text-xs text-slate-300 p-4 rounded-xl shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed text-left">
-                            <div className="absolute bottom-full right-1 -mb-[1px] border-8 border-transparent border-b-slate-900/50"></div>
-                            <p>Si tu publicación está configurada como <strong className="text-white">visible</strong>, otros usuarios podrán ver las publicaciones que has realizado a través de UniPost en el feed presente en el inicio.</p>
-                        </div>
-                        </div>
-                    </div>
-                    </div>
-                </div>
-                </div>
-
-                {/* --- SECCIÓN MULTIMEDIA --- */}
-                <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-                <div className="flex justify-between items-center mb-3">
-                    <label className="block text-sm font-bold text-slate-200">📎 Multimedia</label>
-                    <span className="text-xs text-slate-400">{medias.length} archivo(s) seleccionados</span>
-                </div>
-                <input type="file" accept="image/*,video/*" onChange={handleFileChange} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-indigo-600 file:text-white cursor-pointer hover:file:bg-indigo-500 transition" />
-                {medias.length > 0 && (
-                    <div className="mt-4 flex gap-4 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-white/20">
-                    {medias.sort((a, b) => a.order - b.order).map((m, index) => (
-                        <div key={m.id} className="relative min-w-[120px] max-w-[120px] aspect-square border border-white/10 bg-black/40 rounded-xl flex flex-col items-center justify-center overflow-hidden group">
-                        <span className="absolute top-1 left-2 text-[10px] bg-black/70 px-1.5 py-0.5 rounded-full z-10 text-white">#{index + 1}</span>
-                        {m.type === "video" ? <video src={m.previewUrl} className="w-full h-full object-cover opacity-80" /> : <img src={m.previewUrl} alt="prev" className="w-full h-full object-cover opacity-80" />}
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
-                            <button type="button" onClick={() => moveMedia(index, "left")} disabled={index === 0} className="p-1 text-gray-300 hover:text-white disabled:opacity-30">◀</button>
-                            <button type="button" onClick={() => removeMedia(index)} className="p-1 bg-red-500/80 rounded-full text-white text-xs">🗑️</button>
-                            <button type="button" onClick={() => moveMedia(index, "right")} disabled={index === medias.length - 1} className="p-1 text-gray-300 hover:text-white disabled:opacity-30">▶</button>
-                        </div>
-                        </div>
-                    ))}
-                    </div>
-                )}
-                </div>
-
-                {/* --- SECCIÓN VARIANTES --- */}
-                <div className="space-y-4">
-                <label className="block text-sm font-bold text-slate-200">🌍 Variantes por Red</label>
-                {variants.map((v, i) => {
-                    const limit = CHAR_LIMITS[v.network] || 2000;
-                    const effectiveText = v.text || body;
-                    const count = effectiveText.length;
-                    const isOver = count > limit;
-
-                    return (
-                        <div key={i} className={`flex flex-col gap-3 bg-black/20 p-4 rounded-xl border transition-colors relative ${isOver ? "border-red-500/50 bg-red-500/5" : "border-white/10"}`}>
-
-                        {variants.length > 1 && (
-                            <button type="button" onClick={() => removeVariant(i)} className="absolute top-3 right-3 p-1.5 bg-red-500/20 text-red-200 rounded-lg hover:bg-red-500/40 transition text-xs">✕</button>
-                        )}
-
-                        <div className="w-full">
-                            <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Red Social</label>
-                            <select 
-                                value={v.network} 
-                                onChange={(e) => updateVariant(i, "network", e.target.value)} 
-                                className="w-full p-3 bg-black/20 border border-white/10 text-slate-200 rounded-lg text-sm focus:bg-black/40 outline-none"
-                            >
-                                {ALL_POSSIBLE_NETWORKS
-                                    .filter(net => connections[net]?.connected && (!variants.some(va => va.network === net) || net === v.network))
-                                    .map(net => (
-                                        <option key={net} value={net} className="bg-gray-900">{net}</option>
-                                ))}
-                            </select>
-                            <p className="text-[12px] text-green-400 mt-1 flex items-center gap-1">
-                                ✅ Publicando como: <span className="font-bold">{connections[v.network]?.username || "Usuario"}</span>
-                            </p>
-                        </div>
-
-                        <div className="w-full">
-                            <label className="text-xs text-gray-400 uppercase font-bold mb-1 flex justify-between">
-                                <span>Descripción / Copy</span>
-                                {/* 3. CONTADOR DE CARACTERES */}
-                                <span className={`font-mono ${isOver ? "text-red-400 font-bold" : "text-slate-500"}`}>
-                                    {count} / {limit}
-                                </span>
-                            </label>
-                            <textarea
-                                value={v.text}
-                                onChange={(e) => updateVariant(i, "text", e.target.value)}
-                                placeholder={`Texto específico para ${v.network} (opcional, si vacío usa el principal)`}
-                                rows={3}
-                                className={`w-full p-3 rounded-lg bg-black/20 border text-slate-200 placeholder-white/30 resize-none overflow-hidden text-sm focus:bg-black/40 outline-none transition ${isOver ? "border-red-500 focus:border-red-500" : "border-white/10"}`}
-                                style={{ minHeight: "80px" }}
-                            />
-                            {isOver && (
-                                <p className="text-red-400 text-xs mt-1">⚠️ El texto excede el límite de {limit} caracteres para esta red.</p>
-                            )}
-                        </div>
-
-                        </div>
-                    );
-                })}
-                </div>
-
-                {availableNetworks.length > 0 && (
-                <div className="flex gap-2">
-                    <select id="newNetwork" className="p-2 bg-white/10 border border-white/20 rounded-lg text-sm text-slate-200" defaultValue="">
-                    <option value="" disabled>Otra red...</option>
-                    {availableNetworks.map(r => <option key={r} value={r} className="bg-gray-900">{r}</option>)}
-                    </select>
-                    <button type="button" onClick={() => {
-                    const select = document.getElementById("newNetwork") as HTMLSelectElement;
-                    if (select.value) { setVariants([...variants, { network: select.value, text: "" }]); select.value = ""; }
-                    }} className="text-sm bg-green-600/20 text-green-300 px-3 py-2 rounded-lg hover:bg-green-600/30 transition border border-green-500/30">
-                    + Agregar
-                    </button>
-                </div>
-                )}
-
-                <div className="pt-4 border-t border-white/10">
-                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg hover:bg-white/5 transition w-fit">
-                    <input type="checkbox" checked={agendar} onChange={() => setAgendar(!agendar)} className="w-5 h-5 accent-indigo-500" />
-                    <span className="font-bold text-sm">📅 Programar publicación</span>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Categoría" htmlFor="category">
+                <select id="category" value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass}>
+                  {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-slate-200">Feed público de UniPost</span>
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-3.5 py-2.5">
+                  <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-500" />
+                  <span className="text-sm text-slate-300">Mostrar en el inicio una vez publicada <span className="block text-xs text-slate-500">Otros visitantes podrán verla en el feed.</span></span>
                 </label>
+              </div>
+            </div>
+          </Card>
 
-                {agendar && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 p-4 bg-black/20 rounded-xl border border-white/5 animate-in slide-in-from-top-2">
-                    <div>
-                        <label className="text-xs text-gray-400 block mb-1">Fecha</label>
-                        <input type="date" value={fecha} min={new Date().toISOString().split("T")[0]} onChange={(e) => setFecha(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded p-2 text-slate-200 [color-scheme:dark] text-sm" />
+          {/* 3. Multimedia */}
+          <Card className="p-5 sm:p-6">
+            <SectionTitle step={3} title="Imágenes y video" optional={rules.minMedia === 0} />
+            <p className="-mt-2 mb-4 text-xs text-slate-400">
+              {rules.videoOnly ? "TikTok seleccionado: solo 1 video." : `Hasta ${rules.maxImages} imágenes o 1 video`}
+              {!rules.allowMix && !rules.videoOnly && " · sin mezclar fotos y videos"}
+              {` · imágenes hasta ${MAX_IMAGE_MB} MB, video hasta ${MAX_VIDEO_MB} MB`}
+            </p>
+
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
+              className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-8 text-center transition ${dragOver ? "border-indigo-400 bg-indigo-500/10" : "border-white/10 bg-black/20"}`}
+            >
+              <p className="text-sm text-slate-300">Arrastra tus archivos aquí</p>
+              <p className="my-1 text-xs text-slate-500">o</p>
+              <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()}>Elegir archivos</Button>
+              <input ref={fileInputRef} type="file" accept={rules.videoOnly ? "video/mp4,video/quicktime,video/webm" : "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"} multiple className="sr-only" onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
+            </div>
+
+            {medias.length > 0 && (
+              <ol className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {medias.map((m, i) => (
+                  <li key={m.id} className="overflow-hidden rounded-xl border border-white/10 bg-black/30">
+                    <div className="relative aspect-square">
+                      {m.type === "video" ? (
+                        <video src={m.previewUrl} className="h-full w-full object-cover" muted />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={m.previewUrl} alt={`Archivo ${i + 1}`} className="h-full w-full object-cover" />
+                      )}
+                      <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white">{i + 1}{m.type === "video" && " · video"}</span>
                     </div>
-                    <div>
-                        <label className="text-xs text-gray-400 block mb-1">Hora</label>
-                        <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded p-2 text-slate-200 [color-scheme:dark] text-sm" />
+                    <div className="flex items-center justify-between gap-1 p-1.5">
+                      <button type="button" onClick={() => moveMedia(i, -1)} disabled={i === 0} className="rounded-md px-2 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-30" aria-label="Mover a la izquierda">←</button>
+                      <button type="button" onClick={() => removeMedia(m.id)} className="rounded-md px-2 py-1 text-xs text-red-300 hover:bg-red-500/15" aria-label={`Quitar archivo ${i + 1}`}>Quitar</button>
+                      <button type="button" onClick={() => moveMedia(i, 1)} disabled={i === medias.length - 1} className="rounded-md px-2 py-1 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-30" aria-label="Mover a la derecha">→</button>
                     </div>
-                    <div>
-                        <label className="text-xs text-gray-400 block mb-1">Zona</label>
-                        <select value={zona} onChange={(e) => setZona(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded p-2 text-slate-200 text-sm">
-                        {TIMEZONES.map((tz) => <option key={tz.id} value={tz.id} className="text-black">{tz.label} ({getTimeInZone(tz.id)})</option>)}
-                        </select>
-                    </div>
-                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Card>
+
+          {/* 4. Personalizar por red */}
+          {selected.length > 0 && (
+            <Card className="p-5 sm:p-6">
+              <SectionTitle step={4} title="Personalizar por red" optional />
+              <p className="-mt-2 mb-4 text-xs text-slate-400">Opcional. Si dejas un campo vacío se usará el texto principal.</p>
+              <div className="mb-3 flex flex-wrap gap-1 rounded-xl bg-black/20 p-1" role="tablist">
+                {selected.map((n) => {
+                  const over = textFor(n).length > NETWORKS[n].charLimit;
+                  return (
+                    <button key={n} type="button" role="tab" aria-selected={activeCustomTab === n} onClick={() => setActiveCustomTab(n)} className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${activeCustomTab === n ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"}`}>
+                      <Image src={NETWORKS[n].icon} alt="" width={14} height={14} className="h-3.5 w-3.5" />
+                      {NETWORKS[n].label}
+                      {customTexts[n]?.trim() && <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" title="Texto personalizado" />}
+                      {over && <span className="h-1.5 w-1.5 rounded-full bg-red-400" title="Excede el límite" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeCustomTab && (
+                <div role="tabpanel">
+                  <div className="mb-1.5 flex justify-end">
+                    <CharCounter count={textFor(activeCustomTab).length} limit={NETWORKS[activeCustomTab].charLimit} />
+                  </div>
+                  <textarea
+                    value={customTexts[activeCustomTab] ?? ""}
+                    onChange={(e) => setCustomTexts((p) => ({ ...p, [activeCustomTab]: e.target.value }))}
+                    rows={4}
+                    className={`${inputClass} resize-y`}
+                    placeholder={body || `Texto específico para ${NETWORKS[activeCustomTab].label}`}
+                    aria-label={`Texto para ${NETWORKS[activeCustomTab].label}`}
+                  />
+                  {customTexts[activeCustomTab]?.trim() && (
+                    <button type="button" onClick={() => setCustomTexts((p) => ({ ...p, [activeCustomTab]: "" }))} className="mt-2 text-xs text-slate-400 hover:text-slate-200">Usar el texto principal</button>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* 5. Cuándo */}
+          <Card className="p-5 sm:p-6">
+            <SectionTitle step={5} title="¿Cuándo?" />
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup">
+              {([
+                { v: "draft", t: "Guardar como borrador", d: "Revísala y publícala cuando quieras desde Publicaciones." },
+                { v: "schedule", t: "Programar", d: "Se publicará automáticamente en la fecha elegida." },
+              ] as const).map((o) => (
+                <label key={o.v} className={`cursor-pointer rounded-xl border p-3.5 transition ${scheduleMode === o.v ? "border-indigo-400/60 bg-indigo-500/10" : "border-white/10 hover:border-white/25"}`}>
+                  <input type="radio" name="when" value={o.v} checked={scheduleMode === o.v} onChange={() => setScheduleMode(o.v)} className="sr-only" />
+                  <span className="block text-sm font-semibold text-white">{o.t}</span>
+                  <span className="mt-0.5 block text-xs text-slate-400">{o.d}</span>
+                </label>
+              ))}
+            </div>
+            {scheduleMode === "schedule" && (
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                <Field label="Fecha" htmlFor="fecha">
+                  <input id="fecha" type="date" value={fecha} min={new Date().toISOString().split("T")[0]} onChange={(e) => setFecha(e.target.value)} className={inputClass} />
+                </Field>
+                <Field label="Hora" htmlFor="hora">
+                  <input id="hora" type="time" value={hora} onChange={(e) => setHora(e.target.value)} className={inputClass} />
+                </Field>
+                <Field label="Zona horaria" htmlFor="zona">
+                  <select id="zona" value={zona} onChange={(e) => setZona(e.target.value)} className={inputClass}>
+                    {!TIMEZONES.some((t) => t.id === zona) && <option value={zona}>{zona} (tu zona)</option>}
+                    {TIMEZONES.map((tz) => <option key={tz.id} value={tz.id}>{tz.label}</option>)}
+                  </select>
+                </Field>
+                {scheduledDate && !Number.isNaN(scheduledDate.getTime()) && (
+                  <p className="text-xs text-slate-400 sm:col-span-3">
+                    En tu hora local: <span className="text-slate-200">{scheduledDate.toLocaleString("es-CL", { dateStyle: "full", timeStyle: "short" })}</span>
+                  </p>
                 )}
-                </div>
-
-                <button 
-                    disabled={loading || isTextInvalid} 
-                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold text-lg shadow-xl hover:shadow-2xl transition disabled:opacity-50 disabled:bg-gray-600 transform active:scale-[0.99]"
-                >
-                {loading ? "Procesando..." : isTextInvalid ? "⚠️ Corrige los errores de texto" : agendar ? "📅 Agendar Publicación" : "📁 Guardar Publicación"}
-                </button>
-            </form>
-            </div>
-
-            {/* --- SIDEBAR DE REGLAS --- */}
-            <div className="lg:w-64 shrink-0 space-y-4">
-            <div className="bg-white/5 border border-white/10 p-5 rounded-xl sticky top-6">
-                <h3 className="font-bold text-slate-200 mb-4 flex items-center gap-2">
-                📝 Reglas Activas
-                </h3>
-                <div className="space-y-3 text-sm">
-                <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Máx Imágenes</span>
-                    <span className={`font-mono font-bold ${medias.filter(m => m.type === 'image').length > restrictions.maxImages ? "text-red-400" : "text-green-400"}`}>
-                    {restrictions.maxImages}
-                    </span>
-                </div>
-                <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Máx Videos</span>
-                    <span className={`font-mono font-bold ${medias.filter(m => m.type === 'video').length > restrictions.maxVideos ? "text-red-400" : "text-green-400"}`}>
-                    {restrictions.maxVideos}
-                    </span>
-                </div>
-                <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Mezclar Tipos</span>
-                    <span className={`font-bold ${!restrictions.allowMix && medias.some(m => m.type === 'video') && medias.some(m => m.type === 'image') ? "text-red-400" : "text-slate-200"}`}>
-                    {restrictions.allowMix ? "Sí" : "No"}
-                    </span>
-                </div>
-                <div className="border-t border-white/10 pt-2 mt-2">
-                    <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Mínimo Archivos</span>
-                    <span className={`font-mono font-bold ${medias.length < restrictions.minMedia ? "text-orange-400" : "text-green-400"}`}>
-                        {restrictions.minMedia}
-                    </span>
-                    </div>
-                </div>
-                </div>
-
-                {variants.some(v => v.network === "TIKTOK") && (
-                <div className="mt-4 p-3 bg-pink-500/10 border border-pink-500/20 rounded-lg text-xs text-pink-200">
-                    TikTok activo: Solo se permiten videos.
-                </div>
-                )}
-            </div>
-            </div>
-
+              </div>
+            )}
+          </Card>
         </div>
-      )}
+
+        {/* Columna lateral: vista previa + resumen */}
+        <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+          <Card className="p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-white">Vista previa</h2>
+              {selected.length > 1 && (
+                <select value={previewNetwork ?? ""} onChange={(e) => setPreviewNetwork(e.target.value as NetworkKey)} className="rounded-lg border border-white/10 bg-black/30 px-2 py-1 text-xs" aria-label="Red de la vista previa">
+                  {selected.map((n) => <option key={n} value={n}>{NETWORKS[n].label}</option>)}
+                </select>
+              )}
+            </div>
+            <div className="overflow-hidden rounded-xl border border-white/10 bg-slate-950">
+              <div className="flex items-center gap-2 p-3">
+                {previewNetwork && <Image src={NETWORKS[previewNetwork].icon} alt="" width={28} height={28} className="h-7 w-7 rounded-full" />}
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-white">{previewNetwork ? connections[previewNetwork]?.username || "Tu cuenta" : "Tu cuenta"}</p>
+                  <p className="text-[10px] text-slate-500">{previewNetwork ? NETWORKS[previewNetwork].label : ""}</p>
+                </div>
+              </div>
+              {medias[0] && (
+                <div className="relative aspect-square bg-black">
+                  {medias[0].type === "video" ? (
+                    <video src={medias[0].previewUrl} className="h-full w-full object-cover" muted />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={medias[0].previewUrl} alt="" className="h-full w-full object-cover" />
+                  )}
+                  {medias.length > 1 && <span className="absolute right-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white">1/{medias.length}</span>}
+                </div>
+              )}
+              <p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words p-3 text-xs leading-relaxed text-slate-300">
+                {previewText || <span className="text-slate-600">Tu texto aparecerá aquí…</span>}
+              </p>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            {issues.length > 0 ? (
+              <div className={submitted ? "" : "opacity-80"}>
+                <h2 className="mb-2 text-sm font-semibold text-white">Antes de guardar</h2>
+                <ul className="space-y-1.5">
+                  {issues.map((i) => (
+                    <li key={i} className={`flex gap-2 text-xs ${submitted ? "text-amber-200" : "text-slate-400"}`}>
+                      <span aria-hidden="true">•</span>{i}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <Alert tone="success">Todo listo para {scheduleMode === "schedule" ? "programar" : "guardar"}.</Alert>
+            )}
+            <Button type="submit" size="lg" className="mt-4 w-full" loading={submitting} disabled={submitted && issues.length > 0}>
+              {submitting ? "Guardando..." : scheduleMode === "schedule" ? "Programar publicación" : "Guardar borrador"}
+            </Button>
+          </Card>
+        </aside>
+      </form>
     </div>
+  );
+}
+
+function SectionTitle({ step, title, optional }: { step: number; title: string; optional?: boolean }) {
+  return (
+    <h2 className="mb-4 flex items-center gap-2.5 text-base font-semibold text-white">
+      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500/20 text-xs text-indigo-200" aria-hidden="true">{step}</span>
+      {title}
+      {optional && <span className="text-xs font-normal text-slate-500">(opcional)</span>}
+    </h2>
+  );
+}
+
+function CharCounter({ count, limit, label }: { count: number; limit: number; label?: string }) {
+  const over = count > limit;
+  const near = !over && count > limit * 0.9;
+  return (
+    <span className={`font-mono text-xs ${over ? "font-semibold text-red-300" : near ? "text-amber-300" : "text-slate-500"}`} aria-live="polite">
+      {count.toLocaleString("es-CL")} / {limit.toLocaleString("es-CL")}{label && ` · ${label}`}
+    </span>
   );
 }

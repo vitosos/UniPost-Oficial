@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server"; 
+import { resolveTargetUser } from "@/lib/session";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { prisma } from "@/lib/prisma";
 import { AtpAgent } from "@atproto/api";
 import { decryptBlueskySecret } from "@/lib/cryptoBluesky";
 
 export async function GET(req: Request) {
-  const session = await getServerSession();
+  // Solo el propio usuario, un super admin o un Manager de su organización pueden ver estos datos.
+  const target = await resolveTargetUser(req);
+  if ("error" in target) return target.error;
+
+  const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
   }

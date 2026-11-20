@@ -1,39 +1,30 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendPasswordResetEmail } from "@/lib/mailer";
+import { issueOtp } from "@/lib/otp";
+import { clientIp, rateLimit } from "@/lib/rateLimit";
+import { normalizeEmail, readJson } from "@/lib/validation";
 
+// Responde siempre { ok: true } para no revelar qué correos existen.
 export async function POST(req: Request) {
   try {
-    const { email } = await req.json();
+    const { email: rawEmail } = await readJson<{ email: string }>(req);
+    const email = normalizeEmail(rawEmail);
+    if (!email) return NextResponse.json({ ok: false, error: "INVALID_EMAIL" }, { status: 400 });
 
-    // 1. Verificar si el usuario existe
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      // Por seguridad, respondemos OK aunque no exista para no revelar usuarios
-      return NextResponse.json({ ok: true }); 
+    if (!rateLimit(`forgot:${clientIp(req)}`, 10, 60 * 60 * 1000)) {
+      return NextResponse.json({ ok: false, error: "TOO_MANY_REQUESTS" }, { status: 429 });
     }
 
-    // 2. Generar código
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // 3. Guardar token (Reutilizamos la tabla VerificationToken)
-    // Borramos tokens anteriores de este email para evitar duplicados
-    await prisma.verificationToken.deleteMany({ where: { identifier: email } });
-
-    await prisma.verificationToken.create({
-      data: {
-        identifier: email,
-        token: code,
-        expires: new Date(Date.now() + 10 * 60 * 1000), // 10 min
-      },
-    });
-
-    // 4. Enviar correo
-    await sendPasswordResetEmail(email, code);
+    const user = await prisma.user.findFirst({ where: { email: { equals: email, mode: "insensitive" } }, select: { id: true } });
+    if (user) {
+      const code = await issueOtp("reset", email);
+      if (code) await sendPasswordResetEmail(email, code);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ ok: false, error: "Error interno" }, { status: 500 });
+    console.error("forgot-password error:", error);
+    return NextResponse.json({ ok: false, error: "INTERNAL_ERROR" }, { status: 500 });
   }
 }

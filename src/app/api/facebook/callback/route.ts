@@ -3,6 +3,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { encrypt } from "@/lib/crypto";
+import { verifyOAuthState } from "@/lib/oauthState";
+import { getCurrentUser } from "@/lib/session";
 
 const FB_VERSION = process.env.FACEBOOK_API_VERSION ?? "v21.0";
 const GRAPH_BASE = `https://graph.facebook.com/${FB_VERSION}`;
@@ -64,16 +66,18 @@ async function getFacebookPage(longLivedUserToken: string) {
   // Solicitamos el access_token de la página directamente por si lo necesitamos guardar,
   // aunque guardando el User Token podemos generar Page Tokens dinámicamente.
   const pagesRes = await fetch(
-    `${GRAPH_BASE}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(longLivedUserToken)}`
+    `${GRAPH_BASE}/me/accounts?fields=id,name`,
+    { headers: { Authorization: `Bearer ${longLivedUserToken}` } }
   );
 
   const rawText = await pagesRes.text();
   if (!pagesRes.ok) {
-    throw new Error(`Error al obtener páginas de FB: ${rawText}`);
+    console.error("Error al obtener páginas de FB:", pagesRes.status);
+    throw new Error("pages_fetch_failed");
   }
 
   const pagesData = JSON.parse(rawText) as {
-    data?: Array<{ id: string; name: string; access_token: string }>;
+    data?: Array<{ id: string; name: string }>;
   };
 
   if (!pagesData.data || pagesData.data.length === 0) {
@@ -90,7 +94,6 @@ async function getFacebookPage(longLivedUserToken: string) {
   return {
     pageId: page.id,
     pageName: page.name,
-    pageAccessToken: page.access_token, // Token específico para actuar como la página
   };
 }
 
@@ -109,14 +112,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/perfil?fb_error=missing_params", baseOrigin));
   }
 
-  let appUserId: number | null = null;
-  try {
-    appUserId = parseInt(decodeURIComponent(stateParam), 10);
-  } catch {}
-
-  if (!appUserId) {
+  // El usuario se toma de la sesión; "state" solo sirve para validar que el flujo lo inició él.
+  if (!(await verifyOAuthState("facebook", stateParam))) {
     return NextResponse.redirect(new URL("/perfil?fb_error=invalid_state", baseOrigin));
   }
+  const sessionUser = await getCurrentUser();
+  if (!sessionUser) {
+    return NextResponse.redirect(new URL("/login", baseOrigin));
+  }
+  const appUserId = sessionUser.id;
 
   try {
     // 1. Obtener Token Usuario (Short)
@@ -144,7 +148,7 @@ export async function GET(req: NextRequest) {
         where: { id: existing.id },
         data: {
           usuarioRed: pageName, // Guardamos el nombre de la página como referencia visual
-          accessToken: longToken,
+          accessToken: encrypt(longToken),
           // Podrías guardar pageId en una columna extra si quieres fijar una página específica
         },
       });
@@ -163,7 +167,7 @@ export async function GET(req: NextRequest) {
 
   } catch (err: any) {
     console.error("Error en callback de Facebook:", err);
-    const msg = err instanceof Error ? err.message : "unknown_error";
-    return NextResponse.redirect(new URL(`/perfil?fb_error=${encodeURIComponent(msg)}`, baseOrigin));
+    // Código fijo: no exponer mensajes internos de la API en la URL.
+    return NextResponse.redirect(new URL("/perfil?fb_error=link_failed", baseOrigin));
   }
 }
